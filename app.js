@@ -251,7 +251,7 @@
       items += `<div class="flow-item train ${cls}" data-train="${esc(t.v)}">
         <div class="fi-time">${esc(r ? r.dep : '—')}</div>
         <div class="fi-main"><span class="no">${esc(t.v)}</span><span class="type ${cls}">${esc(typeShort(r && r.type))}</span></div>
-        <div class="fi-sub">${esc(r ? r.from + '→' + r.to : 'データなし')}</div>
+        <div class="fi-sub">${esc(r ? canon(r.from) + '→' + canon(r.to) : 'データなし')}</div>
         <div class="fi-end">${esc(r ? r.arr : '')}</div>
       </div>`;
       if (i < trains.length - 1) items += '<div class="flow-sep"></div>';
@@ -337,7 +337,7 @@
       <div class="tc-top">
         <span class="no">${esc(no)}</span>
         <span class="type ${cls}">${esc(typeShort(r.type))}</span>
-        <span class="run"><b>${esc(r.dep)}</b> ${esc(r.from)}<i>→</i><b>${esc(r.arr)}</b> ${esc(r.to)}</span>
+        <span class="run"><b>${esc(r.dep)}</b> ${esc(canon(r.from))}<i>→</i><b>${esc(r.arr)}</b> ${esc(canon(r.to))}</span>
       </div>
       ${(r.set || r.carType) ? `<div class="sub">${r.set ? esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : ''}
     </div></li>`;
@@ -348,7 +348,7 @@
     const w = trainRec('weekday', no), h = trainRec('holiday', no);
     const card = (label, r) => r ? `<div class="res-card static">
         <div class="t"><span class="no">${esc(r.no)}</span><span class="type ${typeClass(r.type)}">${esc(typeShort(r.type))}</span>
-        <span class="run">${esc(r.dep)} ${esc(r.from)} → ${esc(r.arr)} ${esc(r.to)}</span></div>
+        <span class="run">${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}</span></div>
         <div class="d">${label}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}${r.note ? ' ・ ' + esc(r.note) : ''}</div>
       </div>` : '';
     const uses = [];
@@ -397,6 +397,8 @@
 
   /* ================= DIAGRAM ================= */
   const MAIN = D.lines['天神大牟田線'];
+  const CANON = { '久留米': '西鉄久留米', '二日市': '西鉄二日市', '小郡': '西鉄小郡', '柳川': '西鉄柳川', '聖マリア': '聖マリア病院前' };
+  const canon = (n) => CANON[n] || n;
   const IDX = MAIN.reduce((a, s, i) => (a[s] = i, a), {});
   const SHORT = { '福岡(天神)': '福岡天神', '西鉄二日市': '二日市', '聖マリア病院前': '聖マリア', '西鉄小郡': '小郡', '西鉄久留米': '久留米', '西鉄柳川': '柳川', '西鉄平尾': '平尾', '西鉄中島': '中島', '西鉄渡瀬': '渡瀬', '西鉄銀水': '銀水' };
   const MAJOR = ['福岡(天神)', '大橋', '西鉄二日市', '筑紫', '西鉄小郡', '花畑', '大善寺', '西鉄柳川', '大牟田'];
@@ -445,7 +447,7 @@
       if (t.kind !== 'train') continue;
       const r = trainRec(dt, t.v);
       if (!r) continue;
-      const a = IDX[r.from], b = IDX[r.to];
+      const a = IDX[canon(r.from)], b = IDX[canon(r.to)];
       if (a == null || b == null) { segs.push({ skip: true, no: t.v }); continue; }
       segs.push({ no: t.v, r, a, b, t1: toMin(r.dep), t2: toMin(r.arr), cls: typeClass(r.type) });
     }
@@ -655,7 +657,7 @@
         html += `<h4 class="tl-title">列車（${hits.length}件）</h4>`;
         html += hits.slice(0, 40).map(({ dt, r }) => `<div class="res-card" data-train="${esc(r.no)}">
             <div class="t"><span class="no">${esc(r.no)}</span><span class="type ${typeClass(r.type)}">${esc(typeShort(r.type))}</span>
-            <span class="run">${esc(r.dep)} ${esc(r.from)} → ${esc(r.arr)} ${esc(r.to)}</span></div>
+            <span class="run">${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}</span></div>
             <div class="d">${dt === 'weekday' ? '平日' : '土日祝'}${r.set ? ' ・ ' + esc(r.set) : ''}</div>
           </div>`).join('');
       }
