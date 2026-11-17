@@ -18,6 +18,8 @@
   };
   const hm = (t) => String(t || '').replace(':', '<span class="colon">:</span>');
   const fmtDur = (m) => (m == null ? '' : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`);
+  const HW = { 'ﾌ': 'フ', 'ﾊ': 'ハ', 'ﾁ': 'チ', 'ﾖ': 'ヨ', 'ﾆ': 'ニ', 'ｺ': 'コ', 'ﾊﾞ': 'バ' };
+  const pretty = (s) => String(s == null ? '' : s).replace(/[\uFF66-\uFF9D]/g, (c) => HW[c] || c);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   const typeClass = (t) => {
@@ -100,7 +102,7 @@
   const totalKousoku = (d) => d.duties.reduce((a, x) => a + (x.kousokuMin || 0), 0);
   const firstDep = (d) => d.duties[0].dep;
   const lastRet = (d) => d.duties[d.duties.length - 1].ret;
-  const routeText = (d) => d.duties.map((x) => `${x.start} → ${x.end}`).join('　／　');
+  const routeText = (d) => d.duties.map((x) => `${pretty(x.start)} → ${pretty(x.end)}`).join('　／　');
   const trainList = (d, dt) => tokenize(d.system || '').filter((t) => t.kind === 'train');
 
   /* ================= ROSTER ================= */
@@ -126,7 +128,7 @@
         <div class="stat"><dt>勤務日数</dt><dd>${ws.length}<small>日</small></dd></div>
         <div class="stat"><dt>平均拘束</dt><dd>${fmtDur(avg)}</dd></div>
       </dl>
-      <p class="hint-line">${p.label}　公休/代休 ${offs}日 ・ 週休 ${weekly}日</p>`;
+      <p class="hint-line">${p.label}　公休/代休 ${offs}日 ・ 週休 ${weekly}日　<button class="linkbtn" id="symBtn">記号の見方</button></p>`;
 
     const weeks = [...new Set(p.days.map((d) => d.week))];
     for (const w of weeks) {
@@ -165,6 +167,7 @@
     });
     $$('.day.work[data-row]', main).forEach((el) => el.addEventListener('click', () => openDuty(el.dataset.p, +el.dataset.row)));
     $$('.day[data-extra]', main).forEach((el) => el.addEventListener('click', () => openExtra(el.dataset.p, +el.dataset.extra)));
+    const sb = $('#symBtn'); if (sb) sb.addEventListener('click', openSymbols);
   }
 
   function dayCard(p, d) {

@@ -331,3 +331,4 @@ html[data-theme="light"] .tchip.on { color: #fff; }
   border: 1px solid color-mix(in srgb, var(--pc, #7d8ca0) 40%, transparent);
   vertical-align: 1px;
 }
+.linkbtn { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 12px; font-weight: 800; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; }
