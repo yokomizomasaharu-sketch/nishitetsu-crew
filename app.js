@@ -81,6 +81,18 @@
 
   const trainRec = (dayType, no) => ((D.trains[dayType] || {})[no] || [])[0] || null;
 
+  /* 出勤場所（乗務開始の駅・基地）を系統の頭から判定 */
+  const PLACE_RE = /^(チヨ|ハヨ|フ|チ|ハ|二|小|善|大|太|津|聖|久|甘|柳)/;
+  function reportPlace(d) {
+    const s = (d.duties && d.duties[0] && d.duties[0].start) || '';
+    const m = String(s).match(PLACE_RE);
+    return m ? m[1] : '';
+  }
+  function placeLabel(code) {
+    const info = CODE_INFO[code];
+    return info ? info.name : code;
+  }
+
   /* ---------- helpers ---------- */
   const patternsOf = (dt) => D.patterns.filter((p) => p.dayType === dt);
   const getPattern = (id) => D.patterns.find((p) => p.id === id);
@@ -174,7 +186,7 @@
           <span class="t">${esc(firstDep(d))}</span><span class="arrow">→</span><span class="t">${esc(lastRet(d))}</span>
           ${split ? '<span class="badge split">分割</span>' : ''}
         </div>
-        <div class="route">${esc(routeText(d))}</div>
+        <div class="route">${reportPlace(d) ? `<span class="place" style="--pc:${CODE_COLOR[reportPlace(d)] || '#7d8ca0'}">${esc(placeLabel(reportPlace(d)))}発</span>` : ''}${esc(routeText(d))}</div>
       </div>
       <div class="right">
         <span class="kousoku">${fmtDur(totalKousoku(d))}</span><span class="k-label">拘束</span>
@@ -214,6 +226,7 @@
         <span class="badge off">${CIRC[(d.dutyNo || 1) - 1]} 行路</span>
         ${d.row ? `<span class="badge off">${d.row}日目</span>` : ''}
         ${extraName ? `<span class="badge split">${esc(extraName)}</span>` : ''}
+        ${reportPlace(d) ? `<span class="place" style="--pc:${CODE_COLOR[reportPlace(d)] || '#7d8ca0'}">出勤 ${esc(placeLabel(reportPlace(d)))}</span>` : ''}
       </div>
       <div class="times">${esc(firstDep(d))}<i>→</i>${esc(lastRet(d))}<span>拘束 ${fmtDur(totalKousoku(d))}</span></div>
       <div class="route">${d.duties.map((x) => `${esc(x.start)} → ${esc(x.end)}`).join('　／　')}</div>
@@ -469,14 +482,155 @@
   }
 
   /* ================= SEARCH ================= */
+  const TIME_PRESETS = [
+    { label: 'すべて', r: '' },
+    { label: '〜6:00', r: '0-360' },
+    { label: '6:00〜9:00', r: '360-540' },
+    { label: '9:00〜12:00', r: '540-720' },
+    { label: '12:00〜15:00', r: '720-900' },
+    { label: '15:00〜18:00', r: '900-1080' },
+    { label: '18:00〜', r: '1080-1560' },
+  ];
+  const searchState = { mode: 'report', place: '', range: '', from: '', to: '', dt: 'all' };
+
+  function reportIndex() {
+    const rows = [];
+    for (const p of D.patterns) {
+      for (const d of p.days) {
+        if (d.kind !== 'work') continue;
+        rows.push({ p, d, place: reportPlace(d), dep: toMin(firstDep(d)), ret: toMin(lastRet(d)) });
+      }
+    }
+    return rows;
+  }
+
   function renderSearch(main) {
     main.innerHTML = `
+      <div class="seg" id="searchMode">
+        <button data-m="report" class="${searchState.mode === 'report' ? 'on' : ''}">出勤で探す</button>
+        <button data-m="kw" class="${searchState.mode === 'kw' ? 'on' : ''}">列番・駅で探す</button>
+      </div>
+      <div id="searchBody"></div>`;
+    $('#searchMode').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-m]'); if (!b) return;
+      searchState.mode = b.dataset.m; render();
+    });
+    if (searchState.mode === 'report') renderReportSearch($('#searchBody'));
+    else renderKeywordSearch($('#searchBody'));
+  }
+
+  function renderReportSearch(host) {
+    const rows = reportIndex();
+    const places = [];
+    const seen = {};
+    const order = ['フ', 'チヨ', 'チ', 'ハヨ', 'ハ', '二', '小', '善', '大', '太', '久', '甘', '柳', '津', '聖'];
+    for (const r of rows) {
+      if (!r.place) continue;
+      if (!seen[r.place]) { seen[r.place] = 0; places.push(r.place); }
+      seen[r.place]++;
+    }
+    places.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    host.innerHTML = `
+      <div class="filter-block">
+        <div class="filter-label">① 出勤場所</div>
+        <div class="place-chips" id="placeChips">
+          <button class="pchip ${searchState.place === '' ? 'on' : ''}" data-place="">すべて<b>${rows.length}</b></button>
+          ${places.map((c) => `<button class="pchip ${searchState.place === c ? 'on' : ''}" data-place="${esc(c)}">
+            <i style="background:${CODE_COLOR[c] || '#7d8ca0'}"></i>${esc(placeLabel(c))}<b>${seen[c]}</b></button>`).join('')}
+        </div>
+      </div>
+      <div class="filter-block">
+        <div class="filter-label">② 出勤時刻</div>
+        <div class="time-chips" id="timeChips">
+          ${TIME_PRESETS.map((t) => `<button class="tchip ${searchState.range === t.r ? 'on' : ''}" data-r="${t.r}">${t.label}</button>`).join('')}
+        </div>
+        <div class="range-row">
+          <input type="time" id="tFrom" value="${searchState.from}" aria-label="開始時刻">
+          <span>〜</span>
+          <input type="time" id="tTo" value="${searchState.to}" aria-label="終了時刻">
+          <button class="btn small" id="applyRange">この範囲</button>
+        </div>
+      </div>
+      <div class="filter-block">
+        <div class="filter-label">③ ダイヤ</div>
+        <div class="time-chips" id="dtChips">
+          <button class="tchip ${searchState.dt === 'all' ? 'on' : ''}" data-dt="all">両方</button>
+          <button class="tchip ${searchState.dt === 'weekday' ? 'on' : ''}" data-dt="weekday">平日</button>
+          <button class="tchip ${searchState.dt === 'holiday' ? 'on' : ''}" data-dt="holiday">土日祝</button>
+        </div>
+      </div>
+      <div id="reportRes"></div>`;
+
+    const apply = () => {
+      let from = null, to = null;
+      if (searchState.range) {
+        const [a, b] = searchState.range.split('-');
+        from = +a; to = +b;
+      } else if (searchState.from || searchState.to) {
+        from = searchState.from ? toMin(searchState.from) : 0;
+        to = searchState.to ? toMin(searchState.to) : 24 * 60 + 120;
+      }
+      const hits = rows.filter((r) => {
+        if (searchState.place && r.place !== searchState.place) return false;
+        if (searchState.dt !== 'all' && r.p.dayType !== searchState.dt) return false;
+        if (from != null && (r.dep == null || r.dep < from)) return false;
+        if (to != null && (r.dep == null || r.dep >= to)) return false;
+        return true;
+      }).sort((a, b) => a.dep - b.dep);
+      const res = $('#reportRes');
+      if (!hits.length) { res.innerHTML = '<div class="empty">条件に合う勤務がありません</div>'; return; }
+      res.innerHTML = `<div class="res-summary">${searchState.place ? esc(placeLabel(searchState.place)) + '発 ・ ' : ''}該当 ${hits.length}件<span>（出勤時刻順）</span></div>
+        ${hits.map((r) => `<div class="res-card" data-goto="${r.p.id}:${r.d.row}">
+          <div class="t">
+            <span class="pill stn" style="--pc:${CODE_COLOR[r.place] || '#7d8ca0'}"><b>${esc(r.place)}</b><i>${esc(placeLabel(r.place))}</i></span>
+            <span class="dep-big">${esc(firstDep(r.d))}</span>
+            <span class="badge work">${r.p.label}</span>
+            <span class="badge off">${CIRC[r.d.dutyNo - 1]}</span>
+          </div>
+          <div class="d">${r.d.row}日目　${esc(firstDep(r.d))}→${esc(lastRet(r.d))}　拘束 ${fmtDur(totalKousoku(r.d))}　${esc(routeText(r.d))}</div>
+        </div>`).join('')}`;
+      $$('[data-goto]', res).forEach((el) => el.addEventListener('click', () => {
+        const [pid, row] = el.dataset.goto.split(':');
+        openDuty(pid, +row);
+      }));
+    };
+
+    $('#placeChips').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-place]'); if (!b) return;
+      searchState.place = b.dataset.place; searchState.range = ''; searchState.from = ''; searchState.to = '';
+      $$('#placeChips .pchip').forEach((x) => x.classList.toggle('on', x === b));
+      $$('#timeChips .tchip').forEach((x) => x.classList.toggle('on', x.dataset.r === ''));
+      apply();
+    });
+    $('#timeChips').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-r]'); if (!b) return;
+      searchState.range = b.dataset.r; searchState.from = ''; searchState.to = '';
+      $('#tFrom').value = ''; $('#tTo').value = '';
+      $$('#timeChips .tchip').forEach((x) => x.classList.toggle('on', x === b));
+      apply();
+    });
+    $('#dtChips').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-dt]'); if (!b) return;
+      searchState.dt = b.dataset.dt;
+      $$('#dtChips .tchip').forEach((x) => x.classList.toggle('on', x === b));
+      apply();
+    });
+    $('#applyRange').addEventListener('click', () => {
+      searchState.from = $('#tFrom').value; searchState.to = $('#tTo').value;
+      searchState.range = '';
+      $$('#timeChips .tchip').forEach((x) => x.classList.toggle('on', false));
+      apply();
+    });
+    apply();
+  }
+
+  function renderKeywordSearch(host) {
+    host.innerHTML = `
       <div class="search-bar">
         <input id="q" type="search" inputmode="search" placeholder="列番 2161 / G140　駅 花畑 / ハ" autocomplete="off" aria-label="検索">
         <button id="qBtn">検索</button>
       </div>
-      <div class="quick" id="quick">
-        <span>よく使う：</span>
+      <div class="quick" id="quick"><span>よく使う：</span>
         <button data-q="2161">2161</button><button data-q="G140">G140</button><button data-q="花畑">花畑</button><button data-q="筑紫">筑紫</button><button data-q="大牟田">大牟田</button>
       </div>
       <div id="res"></div>
