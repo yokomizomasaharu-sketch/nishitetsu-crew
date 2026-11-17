@@ -200,6 +200,7 @@
 
   /* ================= DUTY DETAIL ================= */
   function openDuty(pid, row) {
+    history.replaceState(null, '', '#duty/' + pid + '/' + row);
     const p = getPattern(pid);
     const d = p.days.find((x) => x.row === row);
     if (!d) return;
@@ -731,6 +732,27 @@
   $('#sheetBackdrop').addEventListener('click', closeSheet);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
 
+  let pendingDuty = null;
+  function applyHash() {
+    const h = (location.hash || '').replace(/^#\/?/, '');
+    if (!h) return false;
+    const [view, a, b] = h.split('/');
+    if (!['roster', 'duty', 'diagram', 'search'].includes(view)) return false;
+    state.view = view;
+    if (a && D.patterns.some((p) => p.id === a)) {
+      state.pattern = a; state.dayType = getPattern(a).dayType;
+      state.diagram = a;
+      if (b) state.diagramRow = +b;
+      if (view === 'duty' && b) pendingDuty = { pid: a, row: +b };
+    }
+    return true;
+  }
+  function syncHash() {
+    const cur = (location.hash || '').replace(/^#\/?/, '');
+    if (cur === state.view) return;
+    history.replaceState(null, '', '#' + state.view);
+  }
+
   function render() {
     const main = $('#main');
     $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === state.view));
@@ -738,7 +760,9 @@
     else if (state.view === 'duty') renderDutyList(main);
     else if (state.view === 'diagram') renderDiagram(main);
     else renderSearch(main);
+    syncHash();
     window.scrollTo({ top: 0 });
+    if (pendingDuty) { const pd = pendingDuty; pendingDuty = null; openDuty(pd.pid, pd.row); }
   }
 
   $('#tabs').addEventListener('click', (e) => {
@@ -760,6 +784,8 @@
   });
 
   if (D && D.version) $('#verBadge').textContent = D.version;
+  applyHash();
   render();
+  window.addEventListener('hashchange', () => { if (applyHash()) render(); });
   if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 })();
