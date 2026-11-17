@@ -439,6 +439,8 @@
     });
     $$('[data-train]', main).forEach((el) => el.addEventListener('click', () => openTrain(el.dataset.train)));
     $('[data-open]').addEventListener('click', () => { const [pid, r] = $('[data-open]').dataset.open.split(':'); openDuty(pid, +r); });
+    const wrap = $('#dgWrap'), svg = wrap && wrap.querySelector('svg');
+    if (svg && svg.dataset.xdep) wrap.scrollLeft = Math.max(0, (+svg.dataset.xdep) - 76);
   }
 
   function diagramSVG(d, dt) {
@@ -453,37 +455,44 @@
       segs.push({ no: t.v, r, a, b, t1: toMin(r.dep), t2: toMin(r.arr), cls: typeClass(r.type) });
     }
     const draw = segs.filter((s) => !s.skip);
+    if (!draw.length) return '<div class="empty">この行路の列車データがありません</div>';
     const dep = toMin(firstDep(d)), ret = toMin(lastRet(d));
     const t0 = Math.floor((Math.min(dep, ...draw.map((s) => s.t1)) - 15) / 30) * 30;
     const t1 = Math.ceil((Math.max(ret, ...draw.map((s) => s.t2)) + 10) / 30) * 30;
-    const perMin = 4.4, rowH = 15, leftW = 84, topH = 30, botH = 26;
+    let sMin = Math.min(...draw.map((s) => Math.min(s.a, s.b)));
+    let sMax = Math.max(...draw.map((s) => Math.max(s.a, s.b)));
+    sMin = Math.max(0, sMin - 1); sMax = Math.min(MAIN.length - 1, sMax + 1);
+    const perMin = 4.4, rowH = 17, leftW = 84, topH = 30, botH = 26;
     const W = leftW + (t1 - t0) * perMin + 14;
-    const H = topH + (MAIN.length - 1) * rowH + botH;
+    const H = topH + (sMax - sMin) * rowH + botH;
     const X = (m) => leftW + (m - t0) * perMin;
-    const Y = (i) => topH + i * rowH;
+    const Y = (i) => topH + (i - sMin) * rowH;
 
-    let s = `<svg width="${W.toFixed(0)}" height="${H.toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" role="img" aria-label="箱ダイヤ">`;
-    MAIN.forEach((st, i) => {
+    let s = `<svg width="${W.toFixed(0)}" height="${H.toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" role="img" aria-label="箱ダイヤ" data-xdep="${X(dep).toFixed(0)}">`;
+    for (let i = sMin; i <= sMax; i++) {
+      const st = MAIN[i];
       const major = MAJOR.includes(st);
       s += `<line class="dg-grid${major ? ' mj' : ''}" x1="${leftW}" y1="${Y(i)}" x2="${(W - 4).toFixed(0)}" y2="${Y(i)}"/>`;
-      s += `<text class="dg-station${major ? ' major' : ''}" x="${leftW - 5}" y="${Y(i) + 3.2}" text-anchor="end">${esc(SHORT[st] || st)}</text>`;
-    });
+      s += `<text class="dg-station${major ? ' major' : ''}" x="${leftW - 5}" y="${Y(i) + 3.4}" text-anchor="end">${esc(SHORT[st] || st)}</text>`;
+    }
     for (let m = Math.ceil(t0 / 60) * 60; m <= t1; m += 60) {
       s += `<line class="dg-grid hour" x1="${X(m).toFixed(1)}" y1="${topH - 12}" x2="${X(m).toFixed(1)}" y2="${H - botH + 4}"/>`;
       s += `<text class="dg-hour" x="${X(m).toFixed(1)}" y="${topH - 16}" text-anchor="middle">${Math.floor(m / 60) % 24}</text>`;
     }
     s += `<line class="dg-mark" x1="${X(dep).toFixed(1)}" y1="${topH - 8}" x2="${X(dep).toFixed(1)}" y2="${H - botH + 4}"/>`;
-    s += `<text class="dg-hinttxt" x="${(X(dep) + 2).toFixed(1)}" y="${H - 12}" fill="#c9a227">出勤 ${esc(firstDep(d))}</text>`;
+    s += `<text class="dg-hinttxt" x="${(X(dep) + 2).toFixed(1)}" y="${H - 12}" fill="#d8a72f">出勤 ${esc(firstDep(d))}</text>`;
     s += `<line class="dg-mark" x1="${X(ret).toFixed(1)}" y1="${topH - 8}" x2="${X(ret).toFixed(1)}" y2="${H - botH + 4}"/>`;
-    s += `<text class="dg-hinttxt" x="${(X(ret) - 2).toFixed(1)}" y="${H - 12}" text-anchor="end" fill="#c9a227">退勤 ${esc(lastRet(d))}</text>`;
+    s += `<text class="dg-hinttxt" x="${(X(ret) - 2).toFixed(1)}" y="${H - 12}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
     draw.forEach((g) => {
-      s += `<line class="dg-line ${g.cls}" x1="${X(g.t1).toFixed(1)}" y1="${Y(g.a)}" x2="${X(g.t2).toFixed(1)}" y2="${Y(g.b)}" data-train="${esc(g.no)}"><title>${esc(g.no)} ${esc(g.r.type)} ${esc(g.r.dep)} ${esc(g.r.from)} → ${esc(g.r.arr)} ${esc(g.r.to)}</title></line>`;
+      s += `<line class="dg-line ${g.cls}" x1="${X(g.t1).toFixed(1)}" y1="${Y(g.a)}" x2="${X(g.t2).toFixed(1)}" y2="${Y(g.b)}" data-train="${esc(g.no)}"><title>${esc(g.no)} ${esc(g.r.type)} ${esc(g.r.dep)} ${esc(canon(g.r.from))} → ${esc(g.r.arr)} ${esc(canon(g.r.to))}</title></line>`;
       const mx = (X(g.t1) + X(g.t2)) / 2, my = (Y(g.a) + Y(g.b)) / 2;
-      s += `<text class="dg-label" x="${mx.toFixed(1)}" y="${(my - 2.5).toFixed(1)}" text-anchor="middle">${esc(g.no)}</text>`;
+      s += `<text class="dg-label" x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle">${esc(g.no)}</text>`;
     });
     s += '</svg>';
     const skipped = segs.filter((x) => x.skip).map((x) => x.no);
-    if (skipped.length) s += `<p class="dg-hint" style="padding:4px">他線区（太宰府線・甘木線）の列車：${skipped.map(esc).join('、')}</p>`;
+    s += `<p class="dg-hint" style="padding:2px 6px 4px">表示区間：${esc(canon(MAIN[sMin]))} 〜 ${esc(canon(MAIN[sMax]))}`;
+    if (skipped.length) s += `／他線区などの列車：${skipped.map(esc).join('、')}`;
+    s += '</p>';
     return s;
   }
 
