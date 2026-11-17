@@ -1,0 +1,16 @@
+{
+  "name": "西鉄 乗務員支援システム",
+  "short_name": "乗務員支援",
+  "description": "車掌の輪番・乗務系統・箱ダイヤ（2026.3.14改正）",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f141a",
+  "theme_color": "#10161d",
+  "orientation": "portrait",
+  "lang": "ja",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

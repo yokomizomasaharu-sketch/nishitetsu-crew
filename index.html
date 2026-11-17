@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10161d">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="西鉄 乗務員支援システム — 輪番・乗務系統・箱ダイヤ（2026.3.14改正）">
+<title>西鉄 乗務員支援システム</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">🚃</div>
+      <div class="brand-text">
+        <h1>西鉄 乗務員支援</h1>
+        <p class="sub">車掌 輪番・乗務系統 <span id="verBadge">2026.3.14改正</span></p>
+      </div>
+    </div>
+    <button id="themeBtn" class="icon-btn" aria-label="表示テーマ切替">◐</button>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="tab active" data-view="roster" role="tab">輪番</button>
+    <button class="tab" data-view="duty" role="tab">行路</button>
+    <button class="tab" data-view="diagram" role="tab">箱ダイヤ</button>
+    <button class="tab" data-view="search" role="tab">検索</button>
+  </nav>
+
+  <main id="main"></main>
+
+  <footer class="foot">
+    <p>出典：車掌 輪番表／乗務系統表（2026.3.14改正・社内資料）／列車時刻は「西鉄列車編成両数表 2026/03/14改正」を参照</p>
+    <p class="warn">関係者限り・リンクの無断共有／転載はご遠慮ください。</p>
+  </footer>
+</div>
+
+<div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+<div class="sheet" id="sheet" hidden aria-modal="true" role="dialog">
+  <div class="sheet-grip"></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
