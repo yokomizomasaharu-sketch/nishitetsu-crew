@@ -75,7 +75,7 @@
         i += hit.length;
         continue;
       }
-      out.push({ kind: 'other', v: str[i] });
+      out.push({ kind: /\s/.test(str[i]) ? 'ws' : 'other', v: str[i] });
       i += 1;
     }
     return out;
@@ -287,6 +287,7 @@
         <div class="system-raw">${toks.map((t) => t.kind === 'train'
           ? `<span class="tok-train">${esc(t.v)}</span>`
           : t.kind === 'stn' ? stationPill(t.v, false)
+            : t.kind === 'ws' ? ' '
             : `<span class="tok-mark">${esc(t.v)}</span>`).join('')}</div>
       </div>
       <h4 class="tl-title">乗務タイムライン</h4>
@@ -315,6 +316,8 @@
     };
     for (const t of toks) {
       if (t.kind === 'train') { buf.push(t.v); continue; }
+      if (t.kind === 'ws') continue;
+      if (t.kind === 'mark' && ['(', ')', '普'].includes(t.v)) continue;
       flush();
       if (t.kind === 'stn') html += `<li class="stn"><div class="note">${stationPill(t.v, true)}</div></li>`;
       else if (t.kind === 'mark') html += `<li class="mark"><div class="note"><b>${esc(t.v)}</b>${markDesc(t.v)}</div></li>`;
