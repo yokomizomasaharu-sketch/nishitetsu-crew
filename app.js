@@ -485,9 +485,9 @@
       svg += `<text class="dg-hour" x="${X(m).toFixed(1)}" y="${topH - 17}" text-anchor="middle">${Math.floor(m / 60) % 24}</text>`;
     }
     svg += `<line class="dg-mark" x1="${X(dep).toFixed(1)}" y1="${topH - 10}" x2="${X(dep).toFixed(1)}" y2="${H - botH + 6}"/>`;
-    svg += `<text class="dg-hinttxt" x="${(X(dep) + 3).toFixed(1)}" y="${H - 10}" fill="#d8a72f">出勤 ${esc(firstDep(d))}</text>`;
+    svg += `<text class="dg-hinttxt" x="${(X(dep) + 3).toFixed(1)}" y="${topH - 4}" fill="#d8a72f">出勤 ${esc(firstDep(d))}</text>`;
     svg += `<line class="dg-mark" x1="${X(ret).toFixed(1)}" y1="${topH - 10}" x2="${X(ret).toFixed(1)}" y2="${H - botH + 6}"/>`;
-    svg += `<text class="dg-hinttxt" x="${(X(ret) - 3).toFixed(1)}" y="${H - 10}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
+    svg += `<text class="dg-hinttxt" x="${(X(ret) - 3).toFixed(1)}" y="${topH - 4}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
     draw.forEach((g) => {
       svg += `<line class="dg-line ${g.cls}" x1="${X(g.t1).toFixed(1)}" y1="${Y(g.a)}" x2="${X(g.t2).toFixed(1)}" y2="${Y(g.b)}" data-train="${esc(g.no)}"><title>${esc(g.no)} ${esc(g.r.type)} ${esc(g.r.dep)} ${esc(canon(g.r.from))} → ${esc(g.r.arr)} ${esc(canon(g.r.to))}</title></line>`;
       const mx = (X(g.t1) + X(g.t2)) / 2, my = (Y(g.a) + Y(g.b)) / 2;
