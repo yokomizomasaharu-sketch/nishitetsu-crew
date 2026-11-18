@@ -504,3 +504,120 @@ html[data-theme="light"] .rail-row.depot { color: #0c6d62; }
 .es-caution { font-size: 11px; color: var(--fg-3); margin: 14px 0 0; line-height: 1.65; }
 .es-err { color: var(--ltd); font-size: 12.5px; font-weight: 700; margin: 0 0 8px; }
 a.btn { text-decoration: none; }
+
+/* ---------- ダイヤグラム（v23・スジ線） ---------- */
+.dg-tools { display: flex; align-items: center; gap: 7px; margin: 0 2px 8px; }
+.dg-tools .tchip { padding: 6px 12px; font-size: 12px; }
+.dg-scale { margin-left: auto; font-size: 10.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.lg-sym { color: var(--fg-3); font-size: 11px; }
+.rail-head { border-bottom: 0; }
+.rail-row.branch { padding-left: 7px; color: #8fb2ff; font-size: 9.5px; }
+html[data-theme="light"] .rail-row.branch { color: #2f5fd0; }
+.dg-band { opacity: .5; }
+.dg-band.depot { fill: color-mix(in srgb, #22b8a6 14%, transparent); }
+.dg-band.branch { fill: color-mix(in srgb, #6aa9ff 9%, transparent); }
+.dg-grid.big { opacity: .8; }
+.dg-tr { cursor: pointer; }
+.dg-tr .dg-hit { fill: none; stroke: transparent; stroke-width: 15; }
+.dg-tr .dg-line { fill: none; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; }
+.dg-tr .dg-line.ltd { stroke: var(--ltd); }
+.dg-tr .dg-line.exp { stroke: var(--exp); }
+.dg-tr .dg-line.loc { stroke: var(--loc); }
+.dg-tr .dg-line.dead { stroke: var(--dead); stroke-dasharray: 4 3; stroke-width: 1.6; }
+.dg-tr .dg-line.fb { stroke-dasharray: 3 3; opacity: .85; }
+.dg-tr:active .dg-line { stroke-width: 3.4; }
+.dg-depotlink { stroke: #22b8a6; stroke-width: 1.4; stroke-dasharray: 3 2.4; opacity: .95; }
+.dg-depotdot { fill: var(--bg-2); stroke: #22b8a6; stroke-width: 1.7; }
+.dg-hsq { fill: #c084fc; }
+.dg-sw { fill: none; stroke: #f0a13c; stroke-width: 1.5; }
+.dg-exdot { fill: #60a5fa; }
+.dg-board { fill: var(--bg-2); stroke: var(--exp); stroke-width: 1.8; }
+.dg-alight { fill: var(--bg-2); stroke: var(--weekly); stroke-width: 1.8; }
+.dg-mk-t { font-size: 7.2px; font-weight: 800; font-family: inherit; paint-order: stroke; stroke: var(--bg-2); stroke-width: 2.2px; stroke-linejoin: round; }
+.dg-mk-t.depot { fill: #22b8a6; }
+.dg-mk-t.h { fill: #c084fc; }
+.dg-mk-t.sw { fill: #f0a13c; }
+.dg-mk-t.ex { fill: #60a5fa; }
+.stop-list { display: grid; gap: 1px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.stop-list > div { display: grid; grid-template-columns: 1fr 46px 46px; gap: 6px; padding: 5px 4px; border-bottom: 1px dashed var(--line); }
+.stop-list span { color: var(--fg-2); }
+.stop-list b { text-align: right; font-weight: 700; }
+.stop-list i { text-align: right; font-style: normal; color: var(--fg-3); }
+
+/* ---------- 在線位置バー・運行異常アラート ---------- */
+.posbar {
+  position: sticky; top: 160px; z-index: 23;
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px 6px;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+}
+.posbar .pos-main {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 6px 10px; color: var(--fg-2); font: inherit; font-size: 12px; font-weight: 700;
+  text-align: left; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.posbar .pos-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pos-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--fg-3); }
+.posbar[data-state="ok"] .pos-dot { background: var(--exp); box-shadow: 0 0 0 3px color-mix(in srgb, var(--exp) 22%, transparent); }
+.posbar[data-state="warn"] .pos-dot { background: var(--ltd); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ltd) 26%, transparent); animation: espulse 1.4s ease-in-out infinite; }
+.posbar[data-state="stale"] .pos-dot { background: var(--weekly); }
+.posbar[data-state="err"] .pos-dot { background: var(--ltd); }
+.posbar[data-state="load"] .pos-dot { background: var(--accent); animation: espulse 1s ease-in-out infinite; }
+.posbar .pos-refresh {
+  flex: 0 0 auto; width: 36px; height: 33px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--fg-2); font-size: 16px; cursor: pointer;
+}
+.posbar .pos-refresh:disabled { opacity: .5; }
+.posbar .pos-refresh.spin { animation: esspin .9s linear infinite; }
+.alertbox { margin: 8px 12px 0; border: 1px solid color-mix(in srgb, var(--ltd) 45%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--ltd) 12%, var(--bg-2)); padding: 9px 11px; }
+.alertbox .alert-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; font-size: 12.5px; color: var(--fg); }
+.alertbox .alert-line b { color: var(--ltd); font-size: 13px; }
+.alertbox .alert-line a { font-size: 11.5px; color: var(--accent); font-weight: 800; }
+.alertbox .alert-note { margin: 5px 0 0; font-size: 10.5px; color: var(--fg-3); line-height: 1.5; }
+
+/* 列車カードの在線バッジ */
+.pos-b { display: inline-flex; align-items: center; gap: 5px; margin: 6px 0 0 5px; padding: 3px 9px 3px 4px; border-radius: 8px; font-size: 11.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pos-b i { font-style: normal; font-size: 9px; padding: 1px 4px; border-radius: 5px; background: rgba(255,255,255,.12); }
+.pos-b.on { background: color-mix(in srgb, var(--exp) 16%, transparent); color: var(--exp); }
+.pos-b.delay { background: color-mix(in srgb, var(--weekly) 20%, transparent); color: var(--weekly); }
+.pos-b.warn { background: color-mix(in srgb, var(--ltd) 18%, transparent); color: var(--ltd); }
+.pos-b.idle { background: var(--bg-3); color: var(--fg-3); }
+.pos-line { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin-top: 4px; font-size: 12px; font-weight: 700; }
+.pos-line b { font-size: 10px; padding: 1px 5px; border-radius: 5px; }
+.pos-line span { font-size: 10.5px; color: var(--fg-3); font-weight: 500; }
+.pos-line.on { color: var(--exp); } .pos-line.on b { background: color-mix(in srgb, var(--exp) 18%, transparent); }
+.pos-line.delay { color: var(--weekly); } .pos-line.delay b { background: color-mix(in srgb, var(--weekly) 20%, transparent); }
+.pos-line.warn { color: var(--ltd); } .pos-line.warn b { background: color-mix(in srgb, var(--ltd) 20%, transparent); }
+.pos-line.idle { color: var(--fg-3); } .pos-line.idle b { background: var(--bg-3); }
+.pos-list { display: grid; gap: 2px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pos-list > div { display: grid; grid-template-columns: 46px 40px 1fr auto; align-items: center; gap: 6px; padding: 5px 3px; border-bottom: 1px dashed var(--line); }
+.pos-list .no { font-family: ui-monospace, monospace; font-weight: 800; }
+.pos-list .ty { font-size: 11px; color: var(--fg-3); }
+.pos-list .wh { color: var(--fg-2); }
+.pos-list b { color: var(--exp); font-size: 11.5px; }
+.pos-list .dl b { color: var(--weekly); }
+.pos-list i { display: none; }
+.dg-now { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 2 3; opacity: .9; }
+.dg-pos circle { fill: var(--exp); stroke: var(--bg-2); stroke-width: 1.2; }
+.dg-pos.delay circle { fill: var(--weekly); }
+.dg-posdl { font-size: 7px; font-weight: 800; fill: var(--weekly); paint-order: stroke; stroke: var(--bg-2); stroke-width: 2px; }
+.dg-tr.late .dg-line { stroke: var(--weekly); }
+.dg-tr.lost .dg-line { stroke: var(--ltd); stroke-dasharray: 3 3; opacity: .75; }
+
+/* ---------- 列車チップ・入換マークの色 ---------- */
+.tchips { display: flex; gap: 5px; overflow-x: auto; margin-top: 5px; padding-bottom: 2px; scrollbar-width: none; }
+.tchips::-webkit-scrollbar { display: none; }
+.tchip-s { flex: 0 0 auto; font-size: 10.5px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.tchip-s b { color: var(--accent); font-family: ui-monospace, monospace; }
+.tl .note b.mkb { padding: 0 4px; border-radius: 4px; }
+.tl .note b.mkb.depot { color: #22b8a6; background: color-mix(in srgb, #22b8a6 18%, transparent); }
+.tl .note b.mkb.sw { color: #f0a13c; background: color-mix(in srgb, #f0a13c 18%, transparent); }
+.tl .note b.mkb.h { color: #c084fc; background: color-mix(in srgb, #c084fc 18%, transparent); }
+.tl .note b.mkb.ex { color: #60a5fa; background: color-mix(in srgb, #60a5fa 18%, transparent); }
+.tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tab { font-size: 13px; white-space: nowrap; letter-spacing: 0; }
+.dg-pos, .dg-now, .dg-label, .dg-car, .dg-mk-t, .dg-rest, .dg-resttx, .dg-depotdot, .dg-hsq, .dg-sw, .dg-exdot,
+.dg-board, .dg-alight, .dg-hinttxt, .dg-hour { pointer-events: none; }
+.dg-tr .dg-hit { pointer-events: stroke; }

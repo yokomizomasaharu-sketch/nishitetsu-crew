@@ -9,7 +9,7 @@
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const CIRC = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
 
-  const state = { view: 'roster', dayType: 'weekday', pattern: 'H1', diagram: 'H1', diagramRow: null };
+  const state = { view: 'roster', dayType: 'weekday', pattern: 'H1', diagram: 'H1', diagramRow: null, dgPerMin: 2.4, dgFit: false };
 
   /* ---------- utils ---------- */
   const toMin = (t) => {
@@ -397,6 +397,310 @@
     });
   }
 
+  /* ================= 列車在線位置（西鉄 列車走行位置） =================
+     https://busnavi-railway.nnr.co.jp/tenjin_omuta/tenjin-omuta.json
+     ・公式サイトは CORS ヘッダを返さないため、ブラウザから直接は読めない
+       → 直接 fetch を試し、だめなら中継（r.jina.ai）経由で同じ JSON を読む
+     ・60秒ごとに自動更新（画面が見えているときだけ）＋手動更新
+     ・列番は trainNumber（ASCII を16進で持つ）の 1〜5 文字目
+     ・locationRow は 0=西鉄福岡(天神)（4行）以降 3行ずつ駅に割り当て
+     ================================================================= */
+  const POS = {
+    URL: 'https://busnavi-railway.nnr.co.jp/tenjin_omuta/tenjin-omuta.json',
+    SITE: 'https://busnavi-railway.nnr.co.jp/tenjin_omuta/',
+    X: 'https://twitter.com/nishitetsu_info',
+    INFO: 'https://jik.nishitetsu.jp/traffic/default.htm',
+    KEY: 'pos:tenjin:v1',
+    RELAY: (u) => 'https://r.jina.ai/' + u,
+    status: 'idle',        // idle | loading | ready | error
+    source: '',            // direct / relay
+    fetchedAt: 0,
+    fileTime: '',
+    trains: {},            // 列番 -> { st, row, col, dir, delay, delayMin, dest, type, cars, first, at }
+    error: '',
+    timer: null,
+  };
+  const posStation = (row) => {
+    const r = Number(row);
+    if (!isFinite(r) || r < 0) return null;
+    const i = r <= 3 ? 0 : 1 + Math.floor((r - 4) / 3);
+    return MAIN[i] || null;
+  };
+  function posDecode(h) {
+    let s = '';
+    for (let i = 0; i + 1 < String(h).length; i += 2) {
+      const c = parseInt(String(h).substr(i, 2), 16);
+      if (c >= 32 && c < 127) s += String.fromCharCode(c);
+    }
+    return s;
+  }
+  function posParse(text) {
+    const i = text.indexOf('{"fileCreatedTime"');
+    if (i < 0) throw new Error('在線情報の形式が違います');
+    let raw = text.slice(i);
+    const j = raw.lastIndexOf('}');
+    if (j > 0) raw = raw.slice(0, j + 1);
+    return JSON.parse(raw);
+  }
+  async function posLoad() {
+    try {
+      const raw = localStorage.getItem(POS.KEY);
+      if (!raw) return;
+      const c = JSON.parse(raw);
+      if (!c || !c.trains || !c.fetchedAt) return;
+      if (Date.now() - c.fetchedAt > 30 * 60 * 1000) return;   // 古すぎるものは使わない
+      POS.trains = c.trains; POS.fetchedAt = c.fetchedAt; POS.fileTime = c.fileTime || '';
+      POS.source = c.source || ''; POS.status = 'ready';
+    } catch (e) { /* 無視 */ }
+  }
+  function posSave() {
+    try {
+      localStorage.setItem(POS.KEY, JSON.stringify({ trains: POS.trains, fetchedAt: POS.fetchedAt, fileTime: POS.fileTime, source: POS.source }));
+    } catch (e) { /* 無視 */ }
+  }
+  async function posFetch(force) {
+    if (POS.status === 'loading') return;
+    if (!force && POS.status === 'ready' && Date.now() - POS.fetchedAt < 25 * 1000) return;
+    POS.status = 'loading'; POS.error = '';
+    renderPosBar();
+    const bust = POS.URL + '?t=' + Date.now();
+    let text = '';
+    let source = '';
+    try {
+      // 公式サイトは CORS を返さないため、ふだんは中継経由（直接取れるようになっていればそれを使う）
+      const res = await fetch(POS.RELAY(bust), { cache: 'no-store', credentials: 'omit' });
+      if (!res.ok) throw new Error('中継 HTTP ' + res.status);
+      text = await res.text();
+      source = 'relay';
+    } catch (e) {
+      try {
+        const res = await fetch(bust, { cache: 'no-store', credentials: 'omit' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        text = await res.text();
+        source = 'direct';
+      } catch (e2) {
+        POS.status = 'error';
+        POS.error = (e2 && e2.message) || '取得できません';
+        renderPosBar();
+        if (state.view === 'diagram' || !$('#sheet').hidden) renderKeep();
+        return;
+      }
+    }
+    try {
+      const data = posParse(text);
+      const trains = {};
+      for (const o of (data.locationObjects || [])) {
+        const info = (o.trainInfoObjects || [])[0];
+        if (!info) continue;
+        const code = posDecode(info.trainNumber);
+        const no = code.slice(1, 5);
+        if (!no) continue;
+        const st = posStation(o.locationRow);
+        trains[no] = {
+          st, row: Number(o.locationRow), col: o.locationCol, dir: o.trainDirection,
+          delay: String(o.delay || ''), delayMin: String(info.delayMinutes || ''),
+          dest: info.destStationName || '', type: info.trainType || '', cars: info.carsOfTrain || '',
+          first: info.firstTrainStationNumber || '', at: Date.now(),
+        };
+      }
+      POS.trains = trains;
+      POS.fetchedAt = Date.now();
+      POS.fileTime = String(data.fileCreatedTime || '');
+      POS.source = source;
+      POS.status = 'ready'; POS.error = '';
+      posSave();
+      renderPosBar();
+      if (state.view === 'diagram') renderKeep();
+      else if (! $('#sheet').hidden && $('.pos-detail')) openPosDetail();
+      else {
+        const ae = document.activeElement;
+        if (!ae || (ae.tagName !== 'INPUT' && ae.tagName !== 'TEXTAREA')) renderKeep();
+      }
+    } catch (err) {
+      POS.status = 'error';
+      POS.error = '在線情報を読めませんでした';
+      renderPosBar();
+    }
+  }
+  function posTick() {
+    const today = todayType();
+    // 今日のダイヤの列車だけが対象（他日ダイヤは在線情報の意味がない）
+    return POS.status === 'ready' ? POS.trains : null;
+  }
+  function posInfo(no, dt) {
+    if (POS.status !== 'ready' || dt !== todayType()) return null;
+    const p = POS.trains[no];
+    if (p) {
+      const d = p.delay || '';
+      return { state: d && d !== '0' ? 'delay' : 'on', delay: Number(d || 0), where: p.st || '', type: p.type, dest: p.dest };
+    }
+    // 在線情報にない列車：予定と比べる
+    const seq = stopsOf(dt, no);
+    if (!seq || seq.length < 2) return { state: 'unknown', where: '', delay: 0 };
+    const now = nowMin();
+    const start = seq[0][2] != null ? seq[0][2] : seq[0][1];
+    const end = seq[seq.length - 1][1] != null ? seq[seq.length - 1][1] : seq[seq.length - 1][2];
+    if (start == null || end == null) return { state: 'unknown', where: '', delay: 0 };
+    if (now < start - 2) return { state: 'before', where: '', delay: 0 };
+    if (now >= end - 2) return { state: 'done', where: '', delay: 0 };
+    const rec = trainRec(dt, no);
+    if (rec && /回送/.test(rec.type || '')) return { state: 'unknown', where: '', delay: 0 };
+    return { state: 'missing', where: '', delay: 0 };
+  }
+  function posBadge(no, dt) {
+    const p = posInfo(no, dt);
+    if (!p) return '';
+    if (p.state === 'on') return `<span class="pos-b on" title="西鉄 列車走行位置（${esc(posClock())}）"><i>在線</i>${esc(p.where)}付近・定時</span>`;
+    if (p.state === 'delay') return `<span class="pos-b delay" title="西鉄 列車走行位置（${esc(posClock())}）"><i>遅延</i>${esc(p.where)}付近・${p.delay}分遅れ</span>`;
+    if (p.state === 'missing') return `<span class="pos-b warn" title="在線情報にこの列番がありません（回送・基地内・運休など）"><i>⚠</i>在線なし</span>`;
+    if (p.state === 'before') return `<span class="pos-b idle"><i>−</i>運行前</span>`;
+    if (p.state === 'done') return `<span class="pos-b idle"><i>−</i>運行終了</span>`;
+    return '';
+  }
+  function posLine(no, dt) {
+    const p = posInfo(no, dt);
+    if (!p) return '';
+    const when = `${posClock()} 取得・西鉄 列車走行位置`;
+    if (p.state === 'on') return `<div class="pos-line on"><b>在線</b>${esc(p.where)}付近・定時<span>${esc(when)}</span></div>`;
+    if (p.state === 'delay') return `<div class="pos-line delay"><b>遅延</b>${esc(p.where)}付近・${p.delay}分遅れ<span>${esc(when)}</span></div>`;
+    if (p.state === 'missing') return `<div class="pos-line warn"><b>⚠</b>在線情報にこの列番がありません<span>回送・基地内・運休のいずれか（${esc(when)}）</span></div>`;
+    if (p.state === 'before') return `<div class="pos-line idle"><b>−</b>まだ運行前です<span>${esc(when)}</span></div>`;
+    if (p.state === 'done') return `<div class="pos-line idle"><b>−</b>運行を終えた列車です<span>${esc(when)}</span></div>`;
+    return '';
+  }
+  const posClock = (ts) => {
+    const d = new Date(ts || POS.fetchedAt || Date.now());
+    return `${esPad(d.getHours())}:${esPad(d.getMinutes())}`;
+  };
+  function nowMin() {
+    const d = new Date();
+    let m = d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+    if (d.getHours() < 4) m += 24 * 60;   // 4時前は前日の続き
+    return m;
+  }
+  function todayType() {
+    if (ES.status === 'ready' && ES.diaType) return ES.diaType;
+    const d = new Date();
+    const w = d.getDay();
+    return (w === 0 || w === 6) ? 'holiday' : 'weekday';
+  }
+
+  /* 在線情報の集計（運行異常アラート） */
+  function posDigest() {
+    if (POS.status !== 'ready') return null;
+    const now = nowMin();
+    let running = 0, delayed = 0, maxDelay = 0, missing = 0;
+    const delayedList = [], missingList = [];
+    for (const no of Object.keys(POS.trains)) {
+      const p = POS.trains[no];
+      running++;
+      const d = Number(p.delay || 0);
+      if (d > 0) { delayed++; if (d > maxDelay) maxDelay = d; delayedList.push({ no, d, where: p.st }); }
+    }
+    // 今日のダイヤで「今走っているはず」の列車が在線情報にない
+    const dt = todayType();
+    for (const p of D.patterns) {
+      if (p.dayType !== dt) continue;
+      for (const d of p.days) {
+        for (const lg of (d.legs || [])) {
+          const no = lg.t[0];
+          if (!no || POS.trains[no]) continue;
+          const seq = stopsOf(dt, no);
+          if (!seq || seq.length < 2) continue;
+          const s = seq[0][2] != null ? seq[0][2] : seq[0][1];
+          const e = seq[seq.length - 1][1] != null ? seq[seq.length - 1][1] : seq[seq.length - 1][2];
+          if (s == null || e == null) continue;
+          const rec = (D.trains[dt] || {})[no] && (D.trains[dt] || {})[no][0];
+          if (rec && /回送/.test(rec.type || '')) continue;
+          if (now > s + 3 && now < e - 2 && !missingList.some((x) => x.no === no)) missingList.push({ no, from: s, to: e, lg });
+        }
+      }
+    }
+    missing = missingList.length;
+    const stale = Date.now() - POS.fetchedAt > 3 * 60 * 1000;
+    return { running, delayed, maxDelay, delayedList, missing, missingList, stale };
+  }
+  function renderPosBar() {
+    const bar = $('#posBar');
+    if (!bar) return;
+    bar.hidden = false;
+    let cls = 'idle', txt = '在線位置：タップで取得';
+    if (POS.status === 'loading') { cls = 'load'; txt = '在線位置を取得中…'; }
+    else if (POS.status === 'error') { cls = 'err'; txt = '在線位置を取得できません · タップで詳細'; }
+    else if (POS.status === 'ready') {
+      const dg = posDigest();
+      const parts = [`在線 ${dg.running}本`, `${posClock()}更新`];
+      if (dg.delayed) parts.push(`遅延 ${dg.delayed}本（最大${dg.maxDelay}分）`);
+      if (dg.missing) parts.push(`在線なし ${dg.missing}本`);
+      cls = (dg.maxDelay >= 5) || dg.missing >= 3 || dg.stale ? 'warn' : 'ok';
+      txt = parts.join(' · ');
+      if (POS.source === 'relay') txt += '・中継';
+    }
+    bar.dataset.state = cls;
+    const m = $('#posBarMain');
+    if (m) m.innerHTML = `<span class="pos-dot"></span><span class="pos-txt">${esc(txt)}</span>`;
+    const rf = $('#posRefresh');
+    if (rf) { rf.disabled = POS.status === 'loading'; rf.classList.toggle('spin', POS.status === 'loading'); }
+    const tb = $('.tabs');
+    if (tb) { const top = tb.offsetTop + tb.offsetHeight; bar.style.top = top + 'px'; const eb = $('#esBar'); if (eb && !eb.hidden) { bar.style.top = (eb.offsetTop + eb.offsetHeight) + 'px'; } }
+    renderAlert();
+  }
+  function renderAlert() {
+    const box = $('#alertBox');
+    if (!box) return;
+    const dg = posDigest();
+    let html = '';
+    if (POS.status === 'error') {
+      html = `<div class="alert-line"><b>⚠ 在線情報を取得できません</b><span>${esc(POS.error || '')}。公式の列車走行位置で確認してください。</span>
+        <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a></div>`;
+    } else if (dg) {
+      const items = [];
+      if (dg.stale) items.push(`在線情報が ${posClock()} のまま更新されていません`);
+      if (dg.maxDelay >= 5) items.push(`遅延 ${dg.delayed}本（最大 ${dg.maxDelay}分）`);
+      if (dg.missing >= 3) items.push(`在線情報にない列車 ${dg.missing}本（運休・運転見合わせの可能性）${dg.missingList.slice(0, 4).map((x) => x.no).join('・')}${dg.missing > 4 ? ' ほか' : ''}`);
+      if (items.length) {
+        html = `<div class="alert-line"><b>⚠ 運行異常の可能性</b><span>${items.map(esc).join('　/　')}</span>
+          <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a>
+          <a href="${POS.X}" target="_blank" rel="noopener noreferrer">西鉄公式X</a></div>
+          <p class="alert-note">在線情報（西鉄 列車走行位置）の位置・遅延と、在線していない列車から推定したものです。運休・運転見合わせの公式発表は公式サイト・Xでご確認ください。</p>`;
+      }
+    }
+    box.innerHTML = html;
+    box.hidden = !html;
+    const eb = $('#esBar');
+    if (eb) eb.style.top = '';
+  }
+  function openPosDetail() {
+    const dg = posDigest();
+    const rows = Object.keys(POS.trains).map((no) => ({ no, ...POS.trains[no] }))
+      .sort((a, b) => (b.delay || 0) - (a.delay || 0) || a.no.localeCompare(b.no));
+    showSheet(`<div class="sheet-head"><h2>在線位置（西鉄）</h2><button class="sheet-close" data-close>✕</button></div>
+      <div class="pos-detail">
+        <dl class="es-dl">
+          <dt>状態</dt><dd>${POS.status === 'ready' ? '取得済み' : POS.status === 'error' ? '取得できません' : '取得中'}</dd>
+          <dt>更新</dt><dd>${POS.status === 'ready' ? `${posClock()}（${Math.max(0, Math.round((Date.now() - POS.fetchedAt) / 1000))}秒前）・${POS.fileTime ? '公式生成 ' + POS.fileTime.slice(8, 10) + ':' + POS.fileTime.slice(10, 12) : ''}` : '—'}</dd>
+          <dt>取得経路</dt><dd>${POS.source === 'direct' ? '公式サイトから直接' : POS.source === 'relay' ? '中継サービス（r.jina.ai）経由' : '—'}</dd>
+          <dt>在線</dt><dd>${dg ? `在線 ${dg.running}本 ・ 遅延 ${dg.delayed}本${dg.maxDelay ? `（最大 ${dg.maxDelay}分）` : ''}` : '—'}</dd>
+        </dl>
+        <div class="btn-row"><button class="btn primary" id="posReload"${POS.status === 'loading' ? ' disabled' : ''}>再取得</button>
+          <a class="btn" href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a>
+          <a class="btn" href="${POS.X}" target="_blank" rel="noopener noreferrer">西鉄公式X</a></div>
+        ${POS.status === 'error' ? `<p class="es-err">${esc(POS.error)}</p>` : ''}
+        <h4 class="tl-title" style="margin-top:14px">在線中の列車（${rows.length}本）</h4>
+        <div class="pos-list">
+          ${rows.map((r) => `<div class="${Number(r.delay || 0) > 0 ? 'dl' : ''}"><span class="no">${esc(r.no)}</span><span class="ty">${esc(r.type)}</span><span class="wh">${esc(r.st || '—')}付近</span><b>${Number(r.delay || 0) ? r.delay + '分遅れ' : '定時'}</b><i>${esc(r.dest)}行</i></div>`).join('')}
+        </div>
+        <p class="es-caution">西鉄「列車走行位置」のデータをそのまま表示しています（位置は駅単位・数分前の情報）。公式サイトは CORS の制限で直接読めないため、中継サービス経由で取得しています。公式ページ・公式Xの発表とあわせてご確認ください。</p>
+      </div>`, () => {
+      const r = $('#posReload');
+      if (r) r.addEventListener('click', () => posFetch(true));
+    });
+  }
+  function openPosAlert() {
+    if (POS.status === 'ready') openPosDetail();
+    else posFetch(true);
+  }
+
   /* ================= ROSTER ================= */
   function renderRoster(main) {
     const pats = patternsOf(state.dayType);
@@ -599,7 +903,7 @@
       ${esNoteText(dt) ? `<p class="es-note">${esNoteText(dt)}</p>` : ''}
       ${renderTimeline(d, dt)}
       <div class="btn-row">
-        <button class="btn primary" data-diagram="${p.id}:${d.row}">箱ダイヤで見る</button>
+        <button class="btn primary" data-diagram="${p.id}:${d.row}">ダイヤグラムで見る</button>
         <button class="btn" data-symbols>記号の見方</button>
       </div>`;
   }
@@ -612,6 +916,19 @@
     return `<span class="leg-s">${esc(name)}${tags.join('')}</span>`;
   }
 
+  /* 続行・折り返しで列番が複数ある区間は、列車ごとの時刻を出す（太宰府線の往復など） */
+  function trainChips(lg, dt) {
+    if (!lg || !lg.t || lg.t.length < 2) return '';
+    const chips = lg.t.map((no) => {
+      const seq = stopsOf(dt, no);
+      if (!seq || seq.length < 2) return `<span class="tchip-s">${esc(no)}</span>`;
+      const a = seq[0], z = seq[seq.length - 1];
+      const t1 = a[2] != null ? a[2] : a[1], t2 = z[1] != null ? z[1] : z[2];
+      return `<span class="tchip-s"><b>${esc(no)}</b> ${fmtMin(t1)} ${esc(stopName(a[0]))}→${fmtMin(t2)} ${esc(stopName(z[0]))}</span>`;
+    });
+    return `<div class="tchips">${chips.join('')}</div>`;
+  }
+
   function renderTimeline(d, dt) {
     const legs = legsOf(d);
     if (!legs.length) return '<div class="empty">乗務区間を取得できませんでした。</div>';
@@ -621,7 +938,8 @@
     const markLine = (arr, yobi) => {
       const mk = (arr || []).filter((m) => MARK_INFO[m] && m !== '普' && m !== '~');
       if (!mk.length) return '';
-      return mk.map((m) => `<li class="mark"><div class="note"><b>${esc(m)}</b>${yobi && (m === '出' || m === '入' || m === '入出') ? '<span class="md">（予備の運転士が入出庫代行・本人は休憩）</span>' : markDesc(m)}</div></li>`).join('');
+      const mkCls = (m) => (/^(出|入|入出)$/.test(m) ? 'depot' : m === '×' ? 'sw' : /^H/.test(m) ? 'h' : m === '換' ? 'ex' : '');
+      return mk.map((m) => `<li class="mark"><div class="note"><b class="mkb ${mkCls(m)}">${esc(m)}</b>${yobi && (m === '出' || m === '入' || m === '入出') ? '<span class="md">（予備の運転士が入出庫代行・本人は休憩）</span>' : markDesc(m)}</div></li>`).join('');
     };
     legs.forEach((lg) => {
       const r = trainRec(dt, lg.t[0]);
@@ -650,7 +968,8 @@
           </div>
         </div>
         ${r ? `<div class="sub">全区間 ${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : '<div class="sub">列車データが見つかりません</div>'}
-        ${esCarTag(lg.t[0], dt)}
+        ${trainChips(lg, dt)}
+        ${esCarTag(lg.t[0], dt)}${posBadge(lg.t[0], dt)}
         ${lg.flag === 'whole' ? '<div class="sub">※ 乗務区間の途中時刻を原本から特定できず、列車の全区間を表示しています</div>' : ''}
       </div></li>`;
       html += markLine(lg.post, lg.ayobi);
@@ -684,6 +1003,7 @@
         <span class="run">${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}</span></div>
         <div class="d">${label}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}${r.note ? ' ・ ' + esc(r.note) : ''}</div>
         ${esCarLine(r.no, dt)}
+        ${posLine(r.no, dt)}
       </div>` : '';
     const uses = [];
     for (const p of D.patterns) for (const d of p.days)
@@ -732,31 +1052,71 @@
     $$('.day.work[data-row]', main).forEach((el) => el.addEventListener('click', () => openDuty(el.dataset.p, +el.dataset.row)));
   }
 
-  /* ================= DIAGRAM ================= */
+  /* ================= ダイヤグラム ================= */
   const MAIN = D.lines['天神大牟田線'];
   const CANON = { '久留米': '西鉄久留米', '二日市': '西鉄二日市', '小郡': '西鉄小郡', '柳川': '西鉄柳川', '聖マリア': '聖マリア病院前' };
   const canon = (n) => CANON[n] || n;
   const IDX = MAIN.reduce((a, s, i) => (a[s] = i, a), {});
-  /* 箱ダイヤの軸：営業駅の列に車両基地の行を足す（筑紫基地＝筑紫車両基地） */
-  const DG_AXIS = (() => {
-    const out = [];
-    for (const st of MAIN) {
-      out.push({ name: st, depot: false });
-      if (st === '筑紫') out.push({ name: '筑紫車両基地', depot: true, of: st });
-      if (st === '花畑') out.push({ name: '花畑車両基地', depot: true, of: st });
-    }
-    return out;
-  })();
-  const DG_IDX = DG_AXIS.reduce((a, s, i) => (a[s.name] = i, a), {});
+  const DEPOT_STATION = { '筑紫': '筑紫車両基地', '花畑': '花畑車両基地' };
   const DG_RAIL = { '筑紫車両基地': '筑紫基地', '花畑車両基地': '花畑基地' };
-  const SHORT = { '福岡(天神)': '福岡天神', '西鉄二日市': '二日市', '聖マリア病院前': '聖マリア', '西鉄小郡': '小郡', '西鉄久留米': '久留米', '西鉄柳川': '柳川', '西鉄平尾': '平尾', '西鉄中島': '中島', '西鉄渡瀬': '渡瀬', '西鉄銀水': '銀水' };
-  const MAJOR = ['福岡(天神)', '大橋', '西鉄二日市', '筑紫', '西鉄小郡', '花畑', '大善寺', '西鉄柳川', '大牟田'];
+  const SHORT = {
+    '福岡(天神)': '福岡天神', '西鉄二日市': '二日市', '聖マリア病院前': '聖マリア', '西鉄小郡': '小郡',
+    '西鉄久留米': '久留米', '西鉄柳川': '柳川', '西鉄平尾': '平尾', '西鉄中島': '中島', '西鉄渡瀬': '渡瀬',
+    '西鉄銀水': '銀水', '西鉄五条': '五条', '古賀茶屋': '古賀茶屋', '筑紫車両基地': '筑紫基地', '花畑車両基地': '花畑基地',
+  };
+  const MAJOR = ['福岡(天神)', '大橋', '西鉄二日市', '筑紫', '西鉄小郡', '花畑', '大善寺', '西鉄柳川', '大牟田', '太宰府', '甘木'];
+
+  /* ---- 各駅着発（stops.js を必要になったら読む） ---- */
+  const STOPS = { ready: false, data: null, status: 'idle' };
+  function loadStops() {
+    if (STOPS.status !== 'idle') return;
+    STOPS.status = 'loading';
+    const s = document.createElement('script');
+    s.src = 'stops.js?v24';
+    s.async = true;
+    s.onload = () => {
+      STOPS.data = window.APP_STOPS || null;
+      STOPS.ready = !!STOPS.data;
+      STOPS.status = STOPS.ready ? 'ready' : 'error';
+      DG_CACHE = null;                       // 支線（太宰府・甘木）の行を作り直す
+      if (state.view === 'diagram' || !$('#sheet').hidden) renderKeep();
+    };
+    s.onerror = () => {
+      STOPS.status = 'error';
+      if (state.view === 'diagram') renderKeep();
+    };
+    document.head.appendChild(s);
+  }
+  const stopsOf = (dt, no) => (STOPS.ready && STOPS.data && STOPS.data[dt] ? STOPS.data[dt][no] : null);
+  const stopName = (si) => (STOPS.data && STOPS.data.stations ? STOPS.data.stations[si] : '');
+  const fmtMin = (m) => (m == null ? '—' : `${Math.floor(m / 60) % 24}:${String(Math.round(m) % 60).padStart(2, '0')}`);
+
+  /* ---- ダイヤグラムの軸（駅の並び・車両基地の行・支線） ---- */
+  let DG_CACHE = null;
+  function dgAxis() {
+    if (DG_CACHE) return DG_CACHE;
+    const extra = (STOPS.data && STOPS.data.stations ? STOPS.data.stations : []).filter((s) => MAIN.indexOf(s) < 0);
+    const dz = extra.filter((s) => s === '太宰府');
+    const ag = extra.filter((s) => s !== '太宰府');
+    const rows = [];
+    for (const st of MAIN) {
+      rows.push({ name: st });
+      if (DEPOT_STATION[st]) rows.push({ name: DEPOT_STATION[st], depot: true, of: st });
+      if (st === '西鉄二日市') dz.forEach((n) => rows.push({ name: n, branch: '太宰府線' }));
+      if (st === '宮の陣') ag.forEach((n) => rows.push({ name: n, branch: '甘木線' }));
+    }
+    const idx = {};
+    rows.forEach((r, i) => { idx[r.name] = i; });
+    DG_CACHE = { rows, idx };
+    return DG_CACHE;
+  }
 
   function renderDiagram(main) {
     const p = getPattern(state.diagram);
     const ws = workDays(p);
     if (state.diagramRow == null || !ws.some((x) => x.row === state.diagramRow)) state.diagramRow = ws[0].row;
     const d = ws.find((x) => x.row === state.diagramRow);
+    const perMinTxt = state.dgFit ? '全体' : `1時間 ≒ ${Math.round(state.dgPerMin * 60)}px`;
     main.innerHTML = `
       <div class="seg" id="dayTypeSeg">
         <button data-t="weekday" class="${state.dayType === 'weekday' ? 'on' : ''}">平日</button>
@@ -767,15 +1127,23 @@
       </div>
       <div class="chips" id="dayChips">${ws.map((x) => `<button class="chip ${x.row === state.diagramRow ? 'on' : ''}" data-r="${x.row}">${CIRC[x.dutyNo - 1]} ${x.row}日目</button>`).join('')}</div>
       <div class="dg-title"><b>${esc(firstDep(d))} → ${esc(lastRet(d))}</b>　${esc(p.label)}・${d.row}日目・行路${CIRC[d.dutyNo - 1]}<span>拘束 ${fmtDur(totalKousoku(d))}</span></div>
+      <div class="dg-tools">
+        <button class="tchip ${state.dgFit ? 'on' : ''}" data-zoom="fit">全体</button>
+        <button class="tchip" data-zoom="in">拡大</button>
+        <button class="tchip" data-zoom="out">縮小</button>
+        <span class="dg-scale">${perMinTxt}</span>
+      </div>
       <div class="legend">
         <span><i class="ltd"></i>特急</span><span><i class="exp"></i>急行</span><span><i class="loc"></i>普通</span><span><i class="dead"></i>回送</span>
-        <span><i class="depot"></i>車両基地発着</span><span><i class="rest"></i>休憩（予備代行）</span>
+        <span><i class="rest"></i>休憩（予備代行）</span>
+        <span class="lg-sym">○乗／降　◇入換（×）　■留置（H入）　┄出入庫</span>
       </div>
+      ${STOPS.status === 'loading' ? '<p class="dg-hint">各駅の着発時刻を読み込み中…</p>' : ''}
       ${(() => { const g = diagramSVG(d, p.dayType); return `<div class="dg-flex">
         <div class="dg-rail" id="dgRail">${g.rail}</div>
         <div class="diagram-wrap" id="dgWrap">${g.svg}</div>
       </div><p class="dg-hint">${g.note || ''}</p>`; })()}
-      <p class="dg-hint">縦軸＝駅、横軸＝時刻（横にスクロールできます）。点線は出勤・退勤。列車線をタップすると列車情報が出ます。<br>「筑紫基地」＝筑紫車両基地（チ出・チ入＝本人が入出庫）。ふつうの「筑紫」は筑紫駅（乗務交代）です。</p>
+      <p class="dg-hint">縦軸＝駅、横軸＝時刻（横にスクロール）。細い実線が各列車のスジ（全区間）、○はこの行路の乗・降、◇は入換（×）、■は留置（H入・H出）、┄は入出庫です。スジをタップすると列車の詳細（列番・時刻・車号・入換）が出ます。<br>支線は分岐駅のすぐ下の行に並べています（太宰府は二日市、甘木線は宮の陣）。</p>
       <div class="btn-row"><button class="btn primary" data-open="${p.id}:${d.row}">この行路の詳細</button></div>`;
     $('#dayTypeSeg').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-t]'); if (!b) return;
@@ -789,114 +1157,311 @@
       const b = e.target.closest('button[data-r]'); if (!b) return;
       state.diagramRow = +b.dataset.r; render();
     });
-    $$('[data-train]', main).forEach((el) => el.addEventListener('click', () => openTrain(el.dataset.train)));
+    $('.dg-tools').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-zoom]'); if (!b) return;
+      const z = b.dataset.zoom;
+      if (z === 'fit') state.dgFit = !state.dgFit;
+      else {
+        state.dgFit = false;
+        state.dgPerMin = Math.max(1.2, Math.min(12, state.dgPerMin * (z === 'in' ? 1.35 : 1 / 1.35)));
+      }
+      render();
+    });
+    $$('[data-tr]', main).forEach((el) => el.addEventListener('click', () => {
+      openDiagramTrain(el.dataset.tr, p.dayType, +el.dataset.li);
+    }));
     $('[data-open]').addEventListener('click', () => { const [pid, r] = $('[data-open]').dataset.open.split(':'); openDuty(pid, +r); });
     const wrap = $('#dgWrap'), svg = wrap && wrap.querySelector('svg');
     if (svg && svg.dataset.xdep) wrap.scrollLeft = Math.max(0, (+svg.dataset.xdep) - 24);
   }
 
+  /* 行路の1日を、列車ごとのスジ（全区間の各駅着発）で描く */
   function diagramSVG(d, dt) {
+    const AX = dgAxis();
+    const RIDX = AX.idx;
     const legs = legsOf(d);
-    const segs = [];
-    const ALIAS = { '西鉄福岡(天神)': '福岡(天神)', '筑紫車庫': '筑紫' };
-    const toIdx = (name, depot) => {
-      const n = ALIAS[name] || name;
-      if (depot) {
-        const dn = DEPOT_OF[n];
-        if (dn && DG_IDX[dn] != null) return DG_IDX[dn];
-      }
-      return DG_IDX[n] != null ? DG_IDX[n] : null;
+    const stationRow = (name) => {
+      if (!name) return null;
+      const n = name === '西鉄福岡(天神)' ? '福岡(天神)' : name;
+      return RIDX[n] != null ? RIDX[n] : null;
     };
-    let prevT = null;
-    for (const lg of legs) {
-      const a = toIdx(lg.db, lg.btype === 'depot'), b = toIdx(lg.da, lg.atype === 'depot');
-      if (a == null || b == null) { segs.push({ skip: true, no: lg.t.join('/') }); prevT = lg.at != null ? lg.at : prevT; continue; }
-      const r = trainRec(dt, lg.t[0]);
-      segs.push({ no: lg.t.join('→'), r, a, b, t1: lg.bt, t2: lg.at,
-        cls: typeClass(r && r.type), flag: lg.flag,
-        bt: lg.bt, at: lg.at, bname: lg.bn, aname: lg.an,
-        depot: lg.btype === 'depot' || lg.atype === 'depot',
-        bdepot: lg.btype === 'depot', adepot: lg.atype === 'depot',
-        yobi: lg.byobi, rest: (lg.byobi && lg.bt != null && prevT != null) ? [prevT, lg.bt] : null });
-      if (lg.at != null) prevT = lg.at;
-    }
-    const draw = segs.filter((x) => !x.skip && x.t1 != null && x.t2 != null);
-    if (!draw.length) return { svg: '<div class="empty">この行路の列車データがありません</div>', rail: '' };
+    const rowFor = (name, depot) => {
+      if (depot) {
+        const n = name === '西鉄福岡(天神)' ? '福岡(天神)' : name;
+        const dn = DEPOT_STATION[n];
+        if (dn && RIDX[dn] != null) return RIDX[dn];
+      }
+      return stationRow(name);
+    };
+    const lines = [];       // {no, cls, pts, li, ti, fallback}
+    const marks = [];       // {kind, r, t, r2, label}
+    const skipped = [];
+    const labelAt = [];     // ラベルを置く列車
+
+    legs.forEach((lg, li) => {
+      const cls = typeClass((trainRec(dt, lg.t[0]) || {}).type);
+      let any = false;
+      lg.t.forEach((no, ti) => {
+        const seq = stopsOf(dt, no);
+        if (!seq || seq.length < 2) return;
+        const pts = [];
+        seq.forEach(([si, a, dp]) => {
+          const r = stationRow(stopName(si));
+          if (r == null) return;
+          const t = a != null ? a : dp;
+          if (t == null) return;
+          const prev = pts[pts.length - 1];
+          if (prev && prev.r === r && prev.t === t) return;
+          pts.push({ r, t });
+        });
+        if (!pts.length) return;
+        if (ti === 0 && lg.bt != null) {           // 乗り込み駅（公式に載らない始発など）を足す
+          const br = rowFor(lg.bst, lg.btype === 'depot');
+          if (br != null && br !== pts[0].r && lg.bt <= pts[0].t) pts.unshift({ r: br, t: lg.bt });
+        }
+        if (ti === lg.t.length - 1 && lg.at != null) {   // 降りる駅を足す
+          const ar = rowFor(lg.ast, lg.atype === 'depot');
+          const lastP = pts[pts.length - 1];
+          if (ar != null && ar !== lastP.r && lg.at >= lastP.t) pts.push({ r: ar, t: lg.at });
+        }
+        if (pts.length > 1) { lines.push({ no, cls, pts, li, ti }); any = true; }
+      });
+      if (!any) {   // 停車データがない列車（回送など）は乗務区間を直線で
+        const br = lg.bt != null ? rowFor(lg.bst, lg.btype === 'depot') : null;
+        const ar = lg.at != null ? rowFor(lg.ast, lg.atype === 'depot') : null;
+        if (br != null && ar != null && lg.bt != null && lg.at != null) {
+          lines.push({ no: lg.t[0], cls, pts: [{ r: br, t: lg.bt }, { r: ar, t: lg.at }], li, ti: 0, fallback: true });
+        } else skipped.push(lg.t.join('/'));
+      }
+      /* 入換・出入庫・留置のしるし */
+      const pre = lg.pre || [], post = lg.post || [];
+      if (lg.btype === 'depot' && lg.bt != null) {
+        const dr = rowFor(lg.bst, true), sr = stationRow(lg.bst);
+        if (dr != null) marks.push({ kind: 'depot', r: dr, r2: sr, t: lg.bt, label: '出' });
+      }
+      if (lg.atype === 'depot' && lg.at != null) {
+        const dr = rowFor(lg.ast, true), sr = stationRow(lg.ast);
+        if (dr != null) marks.push({ kind: 'depot', r: dr, r2: sr, t: lg.at, label: '入' });
+      }
+      if (post.includes('H入') && lg.at != null) {
+        const r = stationRow(lg.ast);
+        if (r != null) marks.push({ kind: 'h', r, t: lg.at, label: '留置' });
+      }
+      if (pre.includes('H出') && lg.bt != null) {
+        const r = stationRow(lg.bst);
+        if (r != null) marks.push({ kind: 'h', r, t: lg.bt, label: '出換' });
+      }
+      if (post.includes('×') && lg.at != null) {
+        const r = stationRow(lg.ast);
+        if (r != null) marks.push({ kind: 'sw', r, t: lg.at, label: '入換' });
+      }
+      if (pre.includes('×') && lg.bt != null) {
+        const r = stationRow(lg.bst);
+        if (r != null) marks.push({ kind: 'sw', r, t: lg.bt, label: '入換' });
+      }
+      if (post.includes('換') && lg.at != null) {
+        const r = stationRow(lg.ast);
+        if (r != null) marks.push({ kind: 'ex', r, t: lg.at, label: '交換' });
+      }
+    });
+
+    if (!lines.length) return { svg: '<div class="empty">この行路の列車データがありません</div>', rail: '', note: '' };
+
+    /* 範囲 */
+    const allT = [];
+    lines.forEach((L) => L.pts.forEach((p) => allT.push(p.t)));
     const dep = toMin(firstDep(d)), ret = toMin(lastRet(d));
-    const t0 = Math.floor((Math.min(dep, ...draw.map((x) => x.t1)) - 15) / 30) * 30;
-    const t1 = Math.ceil((Math.max(ret, ...draw.map((x) => x.t2)) + 10) / 30) * 30;
-    let sMin = Math.min(...draw.map((x) => Math.min(x.a, x.b)));
-    let sMax = Math.max(...draw.map((x) => Math.max(x.a, x.b)));
-    sMin = Math.max(0, sMin - 1); sMax = Math.min(DG_AXIS.length - 1, sMax + 1);
-    const perMin = 4.6, rowH = 17, leftW = 6, topH = 26, botH = 28;
-    const W = leftW + (t1 - t0) * perMin + 16;
+    if (dep != null) allT.push(dep);
+    if (ret != null) allT.push(ret);
+    let t0 = Math.floor((Math.min(...allT) - 10) / 30) * 30;
+    let t1 = Math.ceil((Math.max(...allT) + 8) / 30) * 30;
+    let sMin = Math.min(...lines.map((L) => Math.min(...L.pts.map((p) => p.r))));
+    let sMax = Math.max(...lines.map((L) => Math.max(...L.pts.map((p) => p.r))));
+    sMin = Math.max(0, sMin - 1); sMax = Math.min(AX.rows.length - 1, sMax + 1);
+    const span = Math.max(60, t1 - t0);
+    const availW = Math.max(220, (window.innerWidth || 390) - 100);
+    const perMin = state.dgFit ? Math.max(0.55, availW / span) : state.dgPerMin;
+    const rowH = 17, leftW = 4, topH = 28, botH = 30;
+    const W = leftW + span * perMin + 14;
     const H = topH + (sMax - sMin) * rowH + botH;
     const X = (m) => leftW + (m - t0) * perMin;
     const Y = (i) => topH + (i - sMin) * rowH;
 
-    let svg = `<svg width="${W.toFixed(0)}" height="${H.toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" role="img" aria-label="箱ダイヤ" data-xdep="${X(dep).toFixed(0)}">`;
-    let rail = `<div style="height:${topH}px"></div>`;
+    let svg = `<svg width="${W.toFixed(0)}" height="${H.toFixed(0)}" viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" role="img" aria-label="ダイヤグラム" data-xdep="${X(dep != null ? dep : t0).toFixed(0)}">`;
+    let rail = `<div style="height:${topH}px" class="rail-head"></div>`;
+
+    /* 行（駅・基地・支線） */
     for (let i = sMin; i <= sMax; i++) {
-      const ax = DG_AXIS[i];
-      const st = ax.name;
-      const major = !ax.depot && MAJOR.includes(st);
+      const ax = AX.rows[i];
+      const major = !ax.depot && MAJOR.indexOf(ax.name) >= 0;
+      if (ax.depot) svg += `<rect class="dg-band depot" x="0" y="${Y(i) - rowH / 2}" width="${W.toFixed(0)}" height="${rowH}"/>`;
+      if (ax.branch) svg += `<rect class="dg-band branch" x="0" y="${Y(i) - rowH / 2}" width="${W.toFixed(0)}" height="${rowH}"/>`;
       svg += `<line class="dg-grid${major ? ' mj' : ''}${ax.depot ? ' depot' : ''}" x1="0" y1="${Y(i)}" x2="${(W - 2).toFixed(0)}" y2="${Y(i)}"/>`;
-      rail += `<div class="rail-row${major ? ' major' : ''}${ax.depot ? ' depot' : ''}">${esc(ax.depot ? DG_RAIL[st] : (SHORT[st] || st))}</div>`;
+      rail += `<div class="rail-row${major ? ' major' : ''}${ax.depot ? ' depot' : ''}${ax.branch ? ' branch' : ''}">${esc(DG_RAIL[ax.name] || SHORT[ax.name] || ax.name)}</div>`;
     }
     rail += `<div style="height:${botH}px"></div>`;
-    for (let m = Math.ceil(t0 / 60) * 60; m <= t1; m += 60) {
-      svg += `<line class="dg-grid hour" x1="${X(m).toFixed(1)}" y1="${topH - 14}" x2="${X(m).toFixed(1)}" y2="${H - botH + 6}"/>`;
-      svg += `<text class="dg-hour" x="${X(m).toFixed(1)}" y="${topH - 17}" text-anchor="middle">${Math.floor(m / 60) % 24}</text>`;
-    }
-    svg += `<line class="dg-mark" x1="${X(dep).toFixed(1)}" y1="${topH - 10}" x2="${X(dep).toFixed(1)}" y2="${H - botH + 6}"/>`;
-    svg += `<text class="dg-hinttxt" x="${(X(dep) + 3).toFixed(1)}" y="${topH - 4}" fill="#d8a72f">出勤 ${esc(firstDep(d))}</text>`;
-    svg += `<line class="dg-mark" x1="${X(ret).toFixed(1)}" y1="${topH - 10}" x2="${X(ret).toFixed(1)}" y2="${H - botH + 6}"/>`;
-    svg += `<text class="dg-hinttxt" x="${(X(ret) - 3).toFixed(1)}" y="${topH - 4}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
 
-    /* 休憩（予備の運転士が入出庫代行）の帯 — 筑紫の行に描く */
-    const tsuIdx = DG_IDX['筑紫'];
-    draw.forEach((g) => {
-      if (!g.rest) return;
-      const [r1, r2] = g.rest;
-      if (r2 - r1 < 2) return;
-      const y = Y(tsuIdx) - 4;
-      svg += `<line class="dg-rest" x1="${X(r1).toFixed(1)}" y1="${y}" x2="${X(r2).toFixed(1)}" y2="${y}"><title>休憩 ${fmtT(r1)}〜${fmtT(r2)}（予備の運転士が入出庫を代行）</title></line>`;
-      svg += `<text class="dg-resttx" x="${((X(r1) + X(r2)) / 2).toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="middle">休憩</text>`;
+    /* 時目盛り */
+    const hourStep = perMin * 60 < 22 ? 3 : perMin * 60 < 40 ? 2 : 1;
+    for (let m = Math.ceil(t0 / 60) * 60; m <= t1; m += 60) {
+      const hh = (m / 60) % 24;
+      const big = hh % hourStep === 0;
+      svg += `<line class="dg-grid hour${big ? ' big' : ''}" x1="${X(m).toFixed(1)}" y1="${topH - 14}" x2="${X(m).toFixed(1)}" y2="${H - botH + 6}"/>`;
+      if (big) svg += `<text class="dg-hour" x="${X(m).toFixed(1)}" y="${topH - 17}" text-anchor="middle">${Math.floor(hh)}</text>`;
+    }
+    /* 出勤・退勤 */
+    if (dep != null) {
+      svg += `<line class="dg-mark" x1="${X(dep).toFixed(1)}" y1="${topH - 10}" x2="${X(dep).toFixed(1)}" y2="${H - botH + 6}"/>`;
+      svg += `<text class="dg-hinttxt" x="${(X(dep) + 3).toFixed(1)}" y="${topH - 4}" fill="#d8a72f">出勤 ${esc(firstDep(d))}</text>`;
+    }
+    if (ret != null) {
+      svg += `<line class="dg-mark" x1="${X(ret).toFixed(1)}" y1="${topH - 10}" x2="${X(ret).toFixed(1)}" y2="${H - botH + 6}"/>`;
+      svg += `<text class="dg-hinttxt" x="${(X(ret) - 3).toFixed(1)}" y="${topH - 4}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
+    }
+
+    /* 予備代行の休憩（筑紫の行） */
+    const tsuRow = RIDX['筑紫'];
+    let prevAt = dep;
+    legs.forEach((lg) => {
+      if (lg.byobi && lg.bt != null && prevAt != null && lg.bt - prevAt >= 2 && tsuRow != null) {
+        const y = Y(tsuRow) - rowH / 2 + 2;
+        svg += `<line class="dg-rest" x1="${X(prevAt).toFixed(1)}" y1="${y}" x2="${X(lg.bt).toFixed(1)}" y2="${y}"><title>休憩 ${fmtMin(prevAt)}〜${fmtMin(lg.bt)}（予備の運転士が入出庫を代行）</title></line>`;
+        svg += `<text class="dg-resttx" x="${((X(prevAt) + X(lg.bt)) / 2).toFixed(1)}" y="${(y - 2).toFixed(1)}" text-anchor="middle">休憩</text>`;
+      }
+      if (lg.at != null) prevAt = lg.at;
     });
 
-    draw.forEach((g) => {
-      svg += `<line class="dg-line ${g.cls}${g.flag === 'conflict' ? ' warn' : ''}${g.depot ? ' depot' : ''}" x1="${X(g.t1).toFixed(1)}" y1="${Y(g.a)}" x2="${X(g.t2).toFixed(1)}" y2="${Y(g.b)}" data-train="${esc(g.no)}"><title>${esc(g.no)} ${esc(g.r ? g.r.type : '')}　乗務区間 ${fmtT(g.bt)} ${esc(g.bname)} → ${fmtT(g.at)} ${esc(g.aname)}</title></line>`;
-      if (g.depot) {
-        if (g.bdepot) svg += `<circle class="dg-depotdot" cx="${X(g.t1).toFixed(1)}" cy="${Y(g.a)}" r="3.2"/>`;
-        if (g.adepot) svg += `<circle class="dg-depotdot" cx="${X(g.t2).toFixed(1)}" cy="${Y(g.b)}" r="3.2"/>`;
-      }
-      if (g.yobi) svg += `<circle class="dg-yobidot" cx="${X(g.t1).toFixed(1)}" cy="${Y(g.a)}" r="3"/>`;
-      const mx = (X(g.t1) + X(g.t2)) / 2, my = (Y(g.a) + Y(g.b)) / 2;
-      svg += `<text class="dg-label" x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle">${esc(g.no)}</text>`;
-      if (esApplies(dt)) {
-        const ci = esCarsOf(g.no.split('→')[0]);
-        if (ci && !ci.none) {
-          const avail = Math.abs(X(g.t2) - X(g.t1)) - 4;
-          let show = ci.cars;
-          if (show.length * 3.7 > avail) {           // 入りきらないときは先頭の編成だけ
-            const first = show.split(/[+＋／]/)[0].trim();
-            show = first.length * 3.7 <= avail ? first : '';
+    /* スジ */
+    const pathD = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p.r).toFixed(1)}`).join(' ');
+    lines.forEach((L) => {
+      const dstr = pathD(L.pts);
+      const first = L.pts[0], last = L.pts[L.pts.length - 1];
+      const w = Math.abs(X(last.t) - X(first.t));
+      const label = L.no.split('→')[0];
+      const pi = posInfo(L.no.split('→')[0], dt);
+      const pcls = pi && pi.state === 'delay' ? ' late' : pi && pi.state === 'missing' ? ' lost' : '';
+      svg += `<g class="dg-tr ${L.cls}${L.fallback ? ' fb' : ''}${pcls}" data-tr="${esc(L.no)}" data-li="${L.li}">`;
+      svg += `<path class="dg-hit" d="${dstr}"/>`;
+      svg += `<path class="dg-line ${L.cls}" d="${dstr}"/>`;
+      svg += `<title>${esc(L.no)} ${esc((trainRec(dt, L.no) || {}).type || '')}　${fmtMin(first.t)} ${esc(AX.rows[first.r].name)} → ${fmtMin(last.t)} ${esc(AX.rows[last.r].name)}</title>`;
+      if (w >= 26 && perMin >= 1.4) {
+        const mid = L.pts[Math.floor(L.pts.length / 2)];
+        const my = Y(mid.r);
+        svg += `<text class="dg-label" x="${X(mid.t).toFixed(1)}" y="${(my - 2).toFixed(1)}" text-anchor="middle">${esc(label)}</text>`;
+        if (esApplies(dt)) {
+          const ci = esCarsOf(label);
+          if (ci && !ci.none) {
+            const full = ci.cars;
+            const show = full.length * 3.5 <= w - 4 ? full : (w >= 34 ? full.split(/[+＋／]/)[0].trim() : '');
+            if (show) svg += `<text class="dg-car" x="${X(mid.t).toFixed(1)}" y="${(my + 7).toFixed(1)}" text-anchor="middle">${esc(show)}</text>`;
           }
-          if (show) svg += `<text class="dg-car" x="${mx.toFixed(1)}" y="${(my + 6.6).toFixed(1)}" text-anchor="middle">${esc(show)}</text>`;
         }
+      }
+      svg += '</g>';
+    });
+
+    /* 入換・出入庫・留置のしるし */
+    const seen = {};
+    marks.forEach((m) => {
+      const key = `${m.kind}:${m.r}:${Math.round(m.t)}`;
+      if (seen[key]) return;
+      seen[key] = 1;
+      const x = X(m.t), y = Y(m.r);
+      if (m.kind === 'depot' && m.r2 != null) {
+        const sy = Y(m.r2);
+        svg += `<line class="dg-depotlink" x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x.toFixed(1)}" y2="${sy.toFixed(1)}"/>`;
+        svg += `<circle class="dg-depotdot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4"><title>${m.label === '出' ? '出庫（車両基地発）' : '入庫（車両基地着）'}</title></circle>`;
+        svg += `<text class="dg-mk-t depot" x="${(x + 4).toFixed(1)}" y="${(y + 3).toFixed(1)}">${m.label}</text>`;
+      } else if (m.kind === 'h') {
+        svg += `<rect class="dg-hsq" x="${(x - 2.6).toFixed(1)}" y="${(y - 2.6).toFixed(1)}" width="5.2" height="5.2"><title>${m.label === '留置' ? '駅構内留置線へ入換（H入）' : '駅構内留置線から出換（H出）'}</title></rect>`;
+        svg += `<text class="dg-mk-t h" x="${(x + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}">${m.label}</text>`;
+      } else if (m.kind === 'sw') {
+        svg += `<path class="dg-sw" d="M${(x - 3.4).toFixed(1)},${y.toFixed(1)} L${x.toFixed(1)},${(y - 3.4).toFixed(1)} L${(x + 3.4).toFixed(1)},${y.toFixed(1)} L${x.toFixed(1)},${(y + 3.4).toFixed(1)} Z"><title>入れ替え（×）をして同じ車両に再び乗務</title></path>`;
+        svg += `<text class="dg-mk-t sw" x="${(x + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}">入換</text>`;
+      } else if (m.kind === 'ex') {
+        svg += `<circle class="dg-exdot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.6"><title>車両交換・乗り換え（換）</title></circle>`;
+        svg += `<text class="dg-mk-t ex" x="${(x + 4).toFixed(1)}" y="${(y + 3).toFixed(1)}">換</text>`;
+      }
+    });
+
+    /* 現在時刻と在線位置 */
+    const nowT = nowMin();
+    if (dt === todayType() && POS.status === 'ready' && nowT >= t0 && nowT <= t1) {
+      svg += `<line class="dg-now" x1="${X(nowT).toFixed(1)}" y1="${topH - 12}" x2="${X(nowT).toFixed(1)}" y2="${H - botH + 6}"/>`;
+      svg += `<text class="dg-hinttxt" x="${(X(nowT) + 3).toFixed(1)}" y="${(topH - 4).toFixed(1)}" fill="#58a6ff">今 ${fmtMin(nowT)}</text>`;
+      lines.forEach((L) => {
+        const no = L.no.split('→')[0];
+        const p = POS.trains[no];
+        if (!p || !p.st) return;
+        const r = RIDX[p.st];
+        if (r == null) return;
+        const dly = Number(p.delay || 0);
+        svg += `<g class="dg-pos${dly ? ' delay' : ''}"><circle cx="${X(nowT).toFixed(1)}" cy="${Y(r).toFixed(1)}" r="4.2"><title>${esc(no)} いま ${esc(p.st)}付近・${dly ? dly + '分遅れ' : '定時'}</title></circle>${dly ? `<text class="dg-posdl" x="${(X(nowT) + 5).toFixed(1)}" y="${(Y(r) + 3).toFixed(1)}">${dly}</text>` : ''}</g>`;
+      });
+    }
+
+    /* 乗・降のしるし */
+    legs.forEach((lg) => {
+      const br = lg.bt != null ? rowFor(lg.bst, lg.btype === 'depot') : null;
+      const ar = lg.at != null ? rowFor(lg.ast, lg.atype === 'depot') : null;
+      if (br != null && lg.bt != null) {
+        svg += `<circle class="dg-board" cx="${X(lg.bt).toFixed(1)}" cy="${Y(br).toFixed(1)}" r="3.4"><title>乗 ${fmtMin(lg.bt)} ${esc(lg.bn)}</title></circle>`;
+      }
+      if (ar != null && lg.at != null) {
+        svg += `<circle class="dg-alight" cx="${X(lg.at).toFixed(1)}" cy="${Y(ar).toFixed(1)}" r="3.4"><title>降 ${fmtMin(lg.at)} ${esc(lg.an)}</title></circle>`;
       }
     });
     svg += '</svg>';
-    const skipped = segs.filter((x) => x.skip).map((x) => x.no);
-    const rowName = (i) => { let j = Math.max(0, Math.min(i, DG_AXIS.length - 1)); while (DG_AXIS[j] && DG_AXIS[j].depot) j -= 1; return DG_AXIS[j] ? DG_AXIS[j].name : ''; };
-    let note = `表示区間：${esc(canon(rowName(sMin)))} 〜 ${esc(canon(rowName(sMax)))}`;
-    if (skipped.length) note += `／他線区などの列車：${skipped.map(esc).join('、')}`;
-    const usedDepot = draw.some((g) => g.depot);
-    const usedYobi = draw.some((g) => g.yobi || g.rest);
-    if (usedDepot) note += '／筑紫基地＝筑紫車両基地（チ出・チ入の本人入出庫）';
-    if (usedYobi) note += '／休憩＝予備の運転士が入出庫を代行';
-    if (esApplies(dt)) note += '／列番の下の小さい数字＝車号（えれサイト4・未投稿は非表示）';
+
+    /* 注記 */
+    const firstRowName = AX.rows[sMin] ? AX.rows[sMin].name : '';
+    const lastRowName = AX.rows[sMax] ? AX.rows[sMax].name : '';
+    let note = `表示範囲：${esc(canon(firstRowName))} 〜 ${esc(canon(lastRowName))}`;
+    if (skipped.length) note += `／時刻が取れなかった列車：${skipped.map(esc).join('、')}`;
+    if (lines.some((L) => L.fallback)) note += '／破線＝各駅時刻が未取得のため乗務区間を直結';
+    if (esApplies(dt)) note += '／列番の下の小さい数字＝車号（えれサイト4）';
+    if (STOPS.status !== 'ready') note += '／各駅の着発時刻を読み込み中（読み込み後に全区間のスジになります）';
     return { svg, rail, note };
+  }
+
+  /* スジをタップしたときの列車シート */
+  function openDiagramTrain(no, dt, li) {
+    const p = getPattern(state.diagram);
+    const d = p && p.days.find((x) => x.row === state.diagramRow);
+    const lg = ((d && d.legs) || [])[li] || null;
+    const seq = stopsOf(dt, no) || [];
+    const rows = [];
+    if (seq.length) {
+      const ns = (si) => stopName(si);
+      const a = seq[0], z = seq[seq.length - 1];
+      rows.push(['全区間', `${fmtMin(a[2] != null ? a[2] : a[1])} ${esc(ns(a[0]))} → ${fmtMin(z[1] != null ? z[1] : z[2])} ${esc(ns(z[0]))}`]);
+      rows.push(['停車駅', `${seq.length}駅`]);
+    }
+    if (lg) {
+      rows.push(['この行路の乗務', `${fmtMin(lg.bt)} ${lg.bn} → ${fmtMin(lg.at)} ${lg.an}`]);
+      const mk = (lg.marks || []).filter((m) => MARK_INFO[m]);
+      if (mk.length) rows.push(['記号', mk.map((m) => `${m}${MARK_INFO[m]}`).join('　')]);
+    }
+    const uses = [];
+    for (const pp of D.patterns) for (const dd of pp.days)
+      if (dd.system && tokenize(dd.system).some((t) => t.kind === 'train' && t.v === no)) uses.push({ pp, dd });
+    showSheet(`<div class="sheet-head"><h2>列車 ${esc(no)}</h2><button class="sheet-close" data-close>✕</button></div>
+      <div class="res-card static">
+        <div class="t"><span class="no">${esc(no)}</span><span class="type ${typeClass((trainRec(dt, no) || {}).type)}">${esc(typeShort((trainRec(dt, no) || {}).type))}</span>
+        <span class="run">${dt === 'weekday' ? '平日' : '土日祝'}</span></div>
+        ${rows.map(([k, v]) => `<div class="d"><b>${esc(k)}</b>　${v}</div>`).join('')}
+        ${esCarLine(no, dt)}
+      </div>
+      ${seq.length ? `<h4 class="tl-title" style="margin-top:14px">各駅の着発</h4>
+        <div class="stop-list">${seq.map(([si, a, dp]) => `<div><span>${esc(stopName(si))}</span><b>${a != null ? fmtMin(a) : '〃'}</b><i>${dp != null ? fmtMin(dp) : '〃'}</i></div>`).join('')}</div>` : ''}
+      ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
+        uses.map((u) => `<div class="res-card" data-goto="${u.pp.id}:${u.dd.row}">
+          <div class="t"><span class="badge work">${u.pp.label}</span><span class="badge off">${CIRC[u.dd.dutyNo - 1]}</span>
+          <span class="run">${u.dd.row}日目 ${esc(firstDep(u.dd))}→${esc(lastRet(u.dd))}</span></div></div>`).join('') : ''}`);
+    $$('[data-goto]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => {
+      const [pid, r] = el.dataset.goto.split(':');
+      closeSheet(); setTimeout(() => openDuty(pid, +r), 80);
+    }));
   }
 
   /* ================= SEARCH ================= */
@@ -1257,6 +1822,21 @@
   esLoad();
   renderEsBar();
   esFetch(false);
+  loadStops();
+
+  /* 在線位置（西鉄 列車走行位置） */
+  posLoad();
+  renderPosBar();
+  posFetch(false);
+  if ($('#posBarMain')) $('#posBarMain').addEventListener('click', () => openPosAlert());
+  if ($('#posRefresh')) $('#posRefresh').addEventListener('click', () => posFetch(true));
+  if ($('#alertBox')) $('#alertBox').addEventListener('click', () => openPosAlert());
+  setInterval(() => {
+    if (document.visibilityState === 'visible') { posFetch(false); renderPosBar(); }
+  }, 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') posFetch(true);
+  });
   if ($('#esBarMain')) $('#esBarMain').addEventListener('click', () => {
     if (ES.status === 'idle') esFetch(true); else openEsDetail();
   });
