@@ -306,10 +306,16 @@
     const legs = legsOf(d);
     if (!legs.length) return '<div class="empty">乗務区間を取得できませんでした。</div>';
     let html = '<ul class="tl">';
+    const markLine = (arr) => {
+      const mk = (arr || []).filter((m) => MARK_INFO[m] && m !== '普' && m !== '~');
+      if (!mk.length) return '';
+      return mk.map((m) => `<li class="mark"><div class="note"><b>${esc(m)}</b>${markDesc(m)}</div></li>`).join('');
+    };
     legs.forEach((lg, i) => {
       const r = trainRec(dt, lg.t[0]);
       const cls = typeClass(r && r.type);
       const warn = lg.flag === 'conflict';
+      html += markLine(lg.pre);
       html += `<li class="train"><div class="train-card ${cls}${warn ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
         <div class="tc-top">
           <span class="no">${esc(lg.t.join('→'))}</span>
@@ -328,15 +334,14 @@
         ${r ? `<div class="sub">全区間 ${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : '<div class="sub">列車データが見つかりません</div>'}
         ${lg.flag === 'whole' ? '<div class="sub">※ 乗務区間の途中時刻を原本から特定できず、列車の全区間を表示しています</div>' : ''}
       </div></li>`;
-      const mk = (lg.marks || []).filter((m) => MARK_INFO[m]);
-      if (mk.length) html += `<li class="mark"><div class="note">${mk.map((m) => `<b>${esc(m)}</b>${markDesc(m)}`).join(' ')}</div></li>`;
+      html += markLine(lg.post);
     });
     return html + '</ul>';
   }
 
   const MARK_INFO = {
     出: '（出庫）', 入: '（入庫）', 換: '（車両交換・乗り換え）', 便: '（便乗）',
-    '×': '（入れ替え・同じ車両で続行）', '~': '（同一編成で続行）', 解放: '（車両解放）',
+    '×': '（入れ替えをして同じ車両に再び乗務）', '~': '（同一編成で続行）', 解放: '（車両解放）',
     H: '（構内留置）', 普: '（同じ車両のまま列番変更）',
   };
   function markDesc(v) {
