@@ -1079,65 +1079,50 @@
         <i class="tick"></i><b class="tc">${esc(codes[i] || '')}</b><span class="nm">${esc(cmdName(n))}</span>${dep ? `<em class="dep">${esc(dep)}</em>` : ''}</div>`;
     }).join('');
   }
-  /* ---------- 配線図ボード（v31） ----------
-     ユーザー指示（2026-11-18）により自作SVGの略図をやめ、実物の配線略図
-     そのものを土台にする：raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」
-     （紺狐）の画像（assets/track-map.jpg、1320×1242）をそのまま表示し、
-     在線チップを絶対配置（%座標）で線路上に重ねる。貝塚線の段も画像の
-     まま含むが、在線情報の対象外のためチップは置かない。
+  /* ---------- 配線図ボード（v32） ----------
+     実物の配線略図を土台に在線チップを重ねる：raildiag 図番号1285
+     「西日本鉄道(西鉄) 配線略図」（紺狐）の画像（assets/track-map.jpg、
+     1320×1124）から貝塚線の段（原図 y844〜961）を切り取って上下を繋いだ
+     ものを使い、在線チップを絶対配置（%座標）で線路上に重ねる。
+     v32（ユーザー指示 2026-11-19）：チップは指令室の壁面パネルのように
+     線路の真上に乗る小さなマーカー（高さ13px）にし、線の割り当ては
+     「上の線＝下り線／下の線＝上り線」に統一した（支線の単線オフセットも
+     下り＝上側／上り＝下側）。遅延はチップ右上の小さなバッジで示す。
      駅座標は画像から実測したマッピング表（TKIMG_*）を使う：本線は段ごと
-     （10駅）の駅プレート中心x・上り線y・下り線y、支線は駅ごとの点。
+     （10駅）の駅プレート中心x・下り線y（上側）・上り線y（下側）、支線は
+     駅ごとの点。甘木線は切り取り分（118px）だけ全体が上にずれている。
      位置は従来どおり駅ブロック単位で、番線レベルの特定はしない。
      番線レベルの詳細は下部の駅詳細パネル（二日市・天神）にだけ置く。 */
-  const TKIMG_W = 1320, TKIMG_H = 1242;
-  /* 本線：段ごと（MAIN index 0-9 / 10-19 / …）の駅中心x・上り線y・下り線y（原図px） */
+  const TKIMG_W = 1320, TKIMG_H = 1124;
+  /* 本線：段ごと（MAIN index 0-9 / 10-19 / …）の駅中心x・下り線y（上側）・上り線y（下側）（画像px） */
   const TKIMG_BANDS = [
-    { xs: [159, 274.5, 343.5, 413, 501.5, 603.5, 673, 742, 830.5, 933], up: 53, dn: 60 },
-    { xs: [156, 225, 403, 504.5, 574, 643, 732, 979, 1047.5, 1117], up: 250, dn: 257 },
-    { xs: [156, 244.5, 347, 416, 485, 584, 686, 821, 922.5, 1071], up: 382, dn: 389 },
-    { xs: [176, 297.5, 399.5, 518, 600, 682.5, 751.5, 834, 932.5, 1127], up: 524, dn: 530 },
-    { xs: [176, 346.5, 436, 537.5, 639.5, 761.5, 844, 926.5, 995, 1114], up: 612, dn: 619 },
+    { xs: [159, 274.5, 343.5, 413, 501.5, 603.5, 673, 742, 830.5, 933], dn: 53, up: 60 },
+    { xs: [156, 225, 403, 504.5, 574, 643, 732, 979, 1047.5, 1117], dn: 250, up: 257 },
+    { xs: [156, 244.5, 347, 416, 485, 584, 686, 821, 922.5, 1071], dn: 382, up: 389 },
+    { xs: [176, 297.5, 399.5, 518, 600, 682.5, 751.5, 834, 932.5, 1127], dn: 524, up: 530 },
+    { xs: [176, 346.5, 436, 537.5, 639.5, 761.5, 844, 926.5, 995, 1114], dn: 612, up: 619 },
   ];
-  /* 支線：駅ごとの点（原図px）。単線のため方向で線の上下にずらして置く */
+  /* 支線：駅ごとの点（画像px）。単線のため方向で線の上下に密着させて置く（下り＝上側／上り＝下側） */
   const TKIMG_BRANCH = {
     dz: [{ x: 250, y: 750 }, { x: 389.5, y: 790 }, { x: 501.5, y: 790 }],
-    ag: [{ x: 140, y: 1017 }, { x: 235, y: 1017 }, { x: 324, y: 1017 }, { x: 412.5, y: 1017 }, { x: 491.5, y: 1017 }, { x: 570.5, y: 1017 }, { x: 659.5, y: 1017 }, { x: 748, y: 1017 }, { x: 837, y: 1017 }, { x: 926, y: 1017 }, { x: 995, y: 1017 }, { x: 1084, y: 1017 }],
+    ag: [{ x: 140, y: 899 }, { x: 235, y: 899 }, { x: 324, y: 899 }, { x: 412.5, y: 899 }, { x: 491.5, y: 899 }, { x: 570.5, y: 899 }, { x: 659.5, y: 899 }, { x: 748, y: 899 }, { x: 837, y: 899 }, { x: 926, y: 899 }, { x: 995, y: 899 }, { x: 1084, y: 899 }],
   };
   /* 車両基地ヤードの位置（原図px）：筑紫＝MAIN 16、西鉄柳川＝MAIN 38 */
   const TKIMG_YARD = { 16: { x: 880, y: 165 }, 38: { x: 1080, y: 490 } };
-  const tkbLabel = (it) => {
+  /* 画像ボード用ラベル：列番＋種別（特急/急行/NL/回送）＋行先まで。
+     遅延はラベルに入れず、チップ右上の小さなバッジ（.dl）で示す */
+  const tkimgLabel = (it) => {
     const ts = typeShort(it.type);
     const tp = (ts === '特急' || ts === '急行' || ts === 'NL' || ts === '回送') ? ts : '';
     const ds = it.dest ? cmdName(it.dest) + '行' : '';
-    const dl = (it.delay || 0) > 0 ? ` +${it.delay}` : '';
-    return [it.no, tp, ds].filter(Boolean).join(' ') + dl + (it.kind === 'ghost' ? ' ?' : '');
+    return [it.no, tp, ds].filter(Boolean).join(' ') + (it.kind === 'ghost' ? ' ?' : '');
   };
-  const tkbChipW = (label) => {
-    let w = 14;
-    for (const ch of label) w += /[ -~]/.test(ch) ? 6.4 : 11;
-    return Math.max(46, Math.ceil(w));
+  /* 画像ボード用チップ幅（画像px）：高さ13px・文字8.5pxの小さなタグ前提 */
+  const tkimgChipW = (label) => {
+    let w = 10;
+    for (const ch of label) w += /[ -~]/.test(ch) ? 5.2 : 8.6;
+    return Math.max(30, Math.ceil(w));
   };
-  function tkbChip(it, x, y, sub) {
-    const label = tkbLabel(it);
-    const w = tkbChipW(label);
-    const cls = ['tkb-chip', typeClass(it.type), it.kind !== 'live' ? it.kind : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
-    const carTxt = it.cars ? ` ・ 車 ${it.cars}` : '';
-    const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${it.kind === 'dead' ? '' : (it.delay || 0) ? '・' + it.delay + '分遅れ' : '・定時'}${carTxt}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : it.kind === 'dead' ? '（回送・乗務データからの推定）' : ''}${sub ? '（番線は推定）' : ''}`;
-    return `<g class="${cls}" data-cmd-train="${esc(it.no)}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
-      <title>${esc(title)}</title>
-      <rect class="body" x="${(-w / 2).toFixed(1)}" y="-8.5" width="${w}" height="17" rx="4"></rect>
-      ${it.delay > 0 ? `<rect class="ring" x="${(-w / 2).toFixed(1)}" y="-8.5" width="${w}" height="17" rx="4"></rect>` : ''}
-      <text y="4">${esc(label)}</text>
-    </g>`;
-  }
-  /* 詳細図用：1つの番線にチップを横並びにする */
-  function tkbRow(items, cx, y) {
-    if (!items.length) return '';
-    const ws = items.map((it) => tkbChipW(tkbLabel(it)));
-    const total = ws.reduce((a, b) => a + b, 0) + 8 * (items.length - 1);
-    let x = cx - total / 2;
-    return items.map((it, i) => { const c = x + ws[i] / 2; x += ws[i] + 8; return tkbChip(it, c, y, true); }).join('');
-  }
   const tkbKeep = (ros, filt) => (no, delay, kind) =>
     filt === 'all' || (filt === 'delay' && delay > 0) || (filt === 'lost' && kind === 'ghost') || (filt === 'roster' && ros.has(no));
 
@@ -1162,15 +1147,17 @@
     if (pos <= 0) { x = pts[0].x + pos * (pts[1].x - pts[0].x); y = pts[0].y + pos * (pts[1].y - pts[0].y); }
     else if (pos >= n - 1) { x = pts[n - 1].x + (pos - (n - 1)) * (pts[n - 1].x - pts[n - 2].x); y = pts[n - 1].y + (pos - (n - 1)) * (pts[n - 1].y - pts[n - 2].y); }
     else { const i = Math.floor(pos), f = pos - i; x = pts[i].x + (pts[i + 1].x - pts[i].x) * f; y = pts[i].y + (pts[i + 1].y - pts[i].y) * f; }
-    return { x, y: y + (upSide ? -13 : 13), zone: 'b' + id + (upSide ? 'u' : 'd'), side: upSide ? 'up' : 'dn' };
+    return { x, y: y + (upSide ? 8 : -8), zone: 'b' + id + (upSide ? 'u' : 'd'), side: upSide ? 'up' : 'dn' };
   }
-  /* 支線の上側は隣の段（貝塚線・太宰府線タイトル等）に侵入しないよう段数を絞る */
-  const TKIMG_MAXLV = { bagu: 1, bdzu: 2 };
-  /* 同じ帯（zone）の中でチップを段ずらしし、画像内にクランプする（原図pxで計算） */
+  /* 支線で線の上側（下り側）に置いたチップは上へ段ずらしするため、
+     隣の段（太宰府線は本線側・甘木線は太宰府線との区切り）へ侵入しないよう段数を絞る */
+  const TKIMG_MAXLV = { bagd: 1, bdzd: 2 };
+  /* 同じ帯（zone）の中でチップを段ずらしし、画像内にクランプする（画像pxで計算）。
+     段ずらしは線から離れる方向だけ：下り（上の線）＝上へ／上り（下の線）＝下へ */
   function tkimgPlace(arr) {
-    const sign = arr[0].side === 'up' ? -1 : 1;
+    const sign = arr[0].stack != null ? arr[0].stack : (arr[0].side === 'dn' ? -1 : 1);
     const maxLv = TKIMG_MAXLV[arr[0].zone] != null ? TKIMG_MAXLV[arr[0].zone] : 3;
-    arr.forEach((it) => { it.pw = tkbChipW(tkbLabel(it)) + 6; });
+    arr.forEach((it) => { it.pw = tkimgChipW(tkimgLabel(it)) + 6 + ((it.delay || 0) > 0 ? 8 : 0); });
     const placed = [];
     arr.slice().sort((a, b) => a.px0 - b.px0).forEach((it) => {
       let lv = maxLv;
@@ -1179,16 +1166,50 @@
       }
       it.level = lv;
       it.px = Math.max(it.pw / 2 + 2, Math.min(TKIMG_W - it.pw / 2 - 2, it.px0));
-      it.py = Math.max(13, Math.min(TKIMG_H - 13, it.py0 + sign * lv * 23));
+      it.py = Math.max(9, Math.min(TKIMG_H - 9, it.py0 + sign * lv * 15));
       placed.push(it);
     });
   }
-  function tkimgChipHTML(it) {
-    const label = tkbLabel(it);
-    const cls = ['tkb-chip', 'img-chip', typeClass(it.type), it.kind !== 'live' ? it.kind : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
+  /* チップHTML：中心 (x, y) を W×H の座標系に対する % で絶対配置する。
+     ボード（全体画像）と駅詳細（切り出し画像）で共用する */
+  function tkChipHTML(it, x, y, W, H) {
+    const label = tkimgLabel(it);
+    const cls = ['tkb-chip', 'img-chip', typeClass(it.type), it.kind !== 'live' ? it.kind : '', (it.delay || 0) > 0 ? 'late' : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
     const carTxt = it.cars ? ` ・ 車 ${it.cars}` : '';
     const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${it.kind === 'dead' ? '' : (it.delay || 0) ? '・' + it.delay + '分遅れ' : '・定時'}${carTxt}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : it.kind === 'dead' ? '（回送・乗務データからの推定）' : ''}`;
-    return `<button class="${cls}" data-cmd-train="${esc(it.no)}" data-x="${it.px.toFixed(0)}" data-y="${it.py.toFixed(0)}" data-w="${it.pw}" style="left:${(it.px / TKIMG_W * 100).toFixed(2)}%;top:${(it.py / TKIMG_H * 100).toFixed(2)}%" title="${esc(title)}">${esc(label)}</button>`;
+    return `<button class="${cls}" data-cmd-train="${esc(it.no)}" data-x="${x.toFixed(0)}" data-y="${y.toFixed(0)}" data-w="${it.pw}" style="left:${(x / W * 100).toFixed(2)}%;top:${(y / H * 100).toFixed(2)}%" title="${esc(title)}">${esc(label)}${(it.delay || 0) > 0 ? `<i class="dl">+${it.delay}</i>` : ''}</button>`;
+  }
+  function tkimgChipHTML(it) {
+    return tkChipHTML(it, it.px, it.py, TKIMG_W, TKIMG_H);
+  }
+  /* 駅詳細用：配線略図から crop（{x0,y0,w,h} 画像px）を切り出した拡大図を
+     土台にし、markers（{it, x, y} 画像px座標）を小さなマーカーで重ねる。
+     同じ線（y）に複数ある場合はアンカー x を中心に横にずらす */
+  function tkdetHTML(crop, markers, alt) {
+    const groups = {};
+    markers.forEach((m) => {
+      m.it.pw = tkimgChipW(tkimgLabel(m.it)) + 6 + ((m.it.delay || 0) > 0 ? 8 : 0);
+      m.lx = m.x - crop.x0;
+      m.ly = m.y - crop.y0;
+      (groups[m.ly] = groups[m.ly] || []).push(m);
+    });
+    const chips = [];
+    Object.keys(groups).forEach((gy) => {
+      const arr = groups[gy].slice().sort((a, b) => a.it.no.localeCompare(b.it.no));
+      const total = arr.reduce((s, m) => s + m.it.pw, 0) + 8 * (arr.length - 1);
+      let cur = arr[0].lx - total / 2;
+      arr.forEach((m) => {
+        const cx = Math.max(m.it.pw / 2 + 2, Math.min(crop.w - m.it.pw / 2 - 2, cur + m.it.pw / 2));
+        chips.push(tkChipHTML(m.it, cx, m.ly, crop.w, crop.h));
+        cur += m.it.pw + 8;
+      });
+    });
+    return `<div class="cmdb tkb-img tkb-det">
+        <div class="tkb-det-wrap" style="aspect-ratio:${crop.w}/${crop.h}" data-det-x0="${crop.x0}" data-det-y0="${crop.y0}" data-det-w="${crop.w}" data-det-h="${crop.h}">
+          <img class="tkb-det-map" src="assets/track-map.jpg" alt="${esc(alt)}" draggable="false" style="width:${(TKIMG_W / crop.w * 100).toFixed(2)}%;left:${(-crop.x0 / crop.w * 100).toFixed(2)}%;top:${(-crop.y0 / crop.h * 100).toFixed(2)}%">
+          ${chips.join('')}
+        </div>
+      </div>`;
   }
 
   function cmdBoardHTML(dg) {
@@ -1210,7 +1231,7 @@
       const yIdx = (t.fromDepot && t.frac <= 0.15) ? MAIN.indexOf(t.from) : (t.toDepot && t.frac >= 0.85) ? MAIN.indexOf(t.to) : -1;
       if (TKIMG_YARD[yIdx]) {
         const yd = TKIMG_YARD[yIdx];
-        items.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, px0: yd.x, py0: yd.y, zone: 'yard' + yIdx, side: 'dn', dim: !keep(t.no, 0, 'dead') });
+        items.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, px0: yd.x, py0: yd.y, zone: 'yard' + yIdx, side: 'dn', stack: 1, dim: !keep(t.no, 0, 'dead') });
         return;
       }
       const p = tkimgMain(t.pos, t.dir);
@@ -1237,14 +1258,14 @@
     const chips = items.map(tkimgChipHTML).join('');
     const jumps = CMD_MAJOR.map((n) => `<button class="cjb" data-cmd-jump="${MAIN.indexOf(n)}">${esc(cmdName(n))}</button>`).join('');
     return `<div class="cmd-bhead">
-        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">実物の配線略図そのものに在線を重ねて表示／在線は駅ブロック単位・番線は特定しない（貝塚線は在線対象外）</span>
+        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">配線略図に在線を重ねて表示／チップは線路の真上に小さく表示（上の線＝下り・下の線＝上り）／在線は駅ブロック単位・番線は特定しない（配線略図は貝塚線の段を除いて使用）</span>
         <span class="cmd-zoom"><button data-cmd-zoom="-"${CMD.zoom <= CMD_ZOOM_STEPS[0] ? ' disabled' : ''}>−</button><button data-cmd-zoom="+"${CMD.zoom >= CMD_ZOOM_STEPS[CMD_ZOOM_STEPS.length - 1] ? ' disabled' : ''}>＋</button></span>
       </div>
       <div class="cmd-jump">${jumps}</div>
       <div class="cmdb tkb-img" id="cmdImgBox">
         <div class="tkb-img-inner" style="width:${CMD.zoom}%">
           <div class="tkb-img-wrap">
-            <img class="tkb-img-map" src="assets/track-map.jpg" alt="西鉄 配線略図（raildiag 図番号1285・紺狐）" draggable="false">
+            <img class="tkb-img-map" src="assets/track-map.jpg" alt="西鉄 配線略図（raildiag 図番号1285・紺狐、貝塚線の段を除く）" draggable="false">
             ${chips}
           </div>
         </div>
@@ -1252,10 +1273,19 @@
   }
 
 
+  /* 駅詳細の切り出し範囲（画像px）。線の位置は配線略図から実測した */
+  const TKDET_FUT = { x0: 250, y0: 195, w: 410, h: 100 };
+  const TKDET_TEN = { x0: 90, y0: 35, w: 340, h: 80 };
+
   /* 駅詳細：西鉄二日市（4面5線・のりば1〜7）
+     v32：手描きSVGをやめ、実物の配線略図（二日市付近の拡大）を土台にする。
      番線割当（推定）：太宰府直通の下り＝2番線（4番のりば・下り副本線）／太宰府からの上り直通＝1番線
      太宰府線シャトル（二日市発着）は1番線（1番のりば）【2026-11-18 本人確認】
-     下り 特急・急行＝3番線（主本線）・普通＝2番線（副本線）／上り 特急・急行＝4番線（主本線）・普通＝5番線（副本線） */
+     下り 特急・急行＝3番線（主本線）・普通＝2番線（副本線）／上り 特急・急行＝4番線（主本線）・普通＝5番線（副本線）
+     ただし実物の図では二日市の線は番線ごとに分かれていないため、マーカーは
+     対応する「線」に置く：太宰府方面（1番線系）＝北側の分岐線 y=237／
+     2番線（下り副本線）＝西側の引上線 y=244／下り本線＝y=250／上り本線＝y=257。
+     5番線（上り副本線）は図に独立した線がないため上り線（y=257）に置く */
   function cmdFutsukaichiHTML(dg) {
     const stn = '西鉄二日市';
     const ros = rosterNos().set;
@@ -1277,109 +1307,46 @@
       if (it.dir === 'down') return (tc === 'ltd' || tc === 'exp') ? 3 : 2;
       return (tc === 'ltd' || tc === 'exp') ? 4 : 5;
     };
-    const trackY = { 1: 62, 2: 104, 3: 146, 4: 188, 5: 230 };
-    const byTrack = { 1: [], 2: [], 3: [], 4: [], 5: [] };
-    list.forEach((it) => byTrack[trackOf(it)].push(it));
-    const chips = Object.keys(byTrack).map((k) => tkbRow(byTrack[k], 465, trackY[k])).join('');
+    const lineOf = {
+      1: { x: 395, y: 237 },
+      2: { x: 312, y: 244 },
+      3: { x: 403, y: 250 },
+      4: { x: 403, y: 257 },
+      5: { x: 403, y: 257 },
+    };
+    const markers = list.map((it) => { const L = lineOf[trackOf(it)]; return { it, x: L.x, y: L.y }; });
     return `<details class="cmd-track" open>
       <summary>駅詳細：西鉄二日市<span>4面5線・のりば1〜7／番線は推定</span></summary>
-      <div class="cmdb tkb-detail">
-      <svg class="tkb-svg" width="980" height="360" viewBox="0 0 980 360" role="img" aria-label="西鉄二日市駅配線図">
-        <text class="sub" x="30" y="26">◀ 西鉄福岡(天神)方面（都府楼前）</text>
-        <text class="sub" x="950" y="26" text-anchor="end">大牟田方面（紫）▶ ／ 太宰府方面 ↗</text>
-        <path class="sdl" d="M120 62 L60 34 M120 62 L78 44 M120 62 L96 54"></path>
-        <line class="sdl" x1="18" y1="30" x2="60" y2="30"></line>
-        <line class="sdl" x1="30" y1="42" x2="76" y2="42"></line>
-        <line class="sdl" x1="44" y1="53" x2="94" y2="53"></line>
-        <text class="sub" x="16" y="18">留置線 3本（旧二日市車両基地の名残）</text>
-        <path class="dzl" d="M800 62 C860 54 905 44 950 34"></path>
-        <path class="sdl dash2" d="M800 104 C855 92 900 74 946 48"></path>
-        <text class="dz-t txb" x="952" y="30" text-anchor="end">太宰府線 ▶ 西鉄五条・太宰府</text>
-        <line class="ln" x1="120" y1="62" x2="800" y2="62"></line>
-        <line class="ln" x1="120" y1="104" x2="800" y2="104"></line>
-        <line class="ln" x1="120" y1="146" x2="800" y2="146"></line>
-        <line class="ln" x1="120" y1="188" x2="800" y2="188"></line>
-        <line class="ln" x1="120" y1="230" x2="800" y2="230"></line>
-        <path class="ln2" d="M120 62 L60 104 M120 104 L60 104 M120 146 L60 146 M120 188 L60 146 M120 230 L60 188"></path>
-        <line class="ln" x1="20" y1="104" x2="60" y2="104"></line>
-        <line class="ln" x1="20" y1="146" x2="60" y2="146"></line>
-        <text class="sub" x="20" y="92">上り本線</text>
-        <text class="sub" x="20" y="166">下り本線</text>
-        <path class="ln2" d="M800 104 L860 104 M800 146 L860 146 M800 188 L860 146 M800 230 L860 188 M700 146 L740 188 M740 146 L700 188"></path>
-        <line class="ln" x1="860" y1="104" x2="960" y2="104"></line>
-        <line class="ln" x1="860" y1="146" x2="960" y2="146"></line>
-        <text class="sub" x="880" y="92">上り本線</text>
-        <text class="sub" x="880" y="166">下り本線</text>
-        <text class="sub" x="720" y="206" text-anchor="middle">紫方の渡り線（当駅止まりの折り返し・太宰府送り込み）</text>
-        <rect class="plat" x="300" y="40" width="330" height="13" rx="3"></rect>
-        <rect class="plat" x="300" y="76" width="330" height="15" rx="3"></rect>
-        <rect class="plat" x="300" y="118" width="330" height="15" rx="3"></rect>
-        <rect class="plat" x="300" y="202" width="330" height="15" rx="3"></rect>
-        <text class="dep-t" x="290" y="51" text-anchor="end">1番のりば</text>
-        <text class="dep-t" x="290" y="88" text-anchor="end">2・3番のりば</text>
-        <text class="dep-t" x="290" y="130" text-anchor="end">4・5番のりば</text>
-        <text class="dep-t" x="290" y="214" text-anchor="end">6・7番のりば</text>
-        <text class="tx" x="465" y="272" text-anchor="middle">1番線：太宰府線 発着（シャトルは1番のりば）／太宰府からの上り直通</text>
-        <text class="tx" x="465" y="290" text-anchor="middle">2番線：上り（3番）／下り副本線・太宰府直通（4番）</text>
-        <text class="tx" x="465" y="308" text-anchor="middle">3番線：下り本線（5番）　4番線：上り本線（6番）　5番線：上り副本線（7番）</text>
-        <text class="sub" x="465" y="330" text-anchor="middle">2・3番のりばは通常不使用（多客期の対面乗り換え用／3番は平日朝1本のみ設定）</text>
-        <text class="rule" x="465" y="350" text-anchor="middle">待避の原則：追い越される列車＝副本線（下り4番／上り7番）　追い越す列車＝主本線（下り5番／上り6番）</text>
-        ${chips}
-      </svg>
-      </div>
+      ${tkdetHTML(TKDET_FUT, markers, '西鉄二日市駅 配線略図（二日市付近の拡大）')}
+      <p class="cmd-note det-note">配線略図（二日市付近の拡大）に表示しています。太宰府方面の列車は北側の分岐線、下り列車は下り線、上り列車は上り線の上に置いています。番線の割当（推定）：1番線＝太宰府線シャトル・太宰府からの上り直通／2番線＝下り副本線（太宰府直通の下り・普通）／3番線＝下り本線／4番線＝上り本線／5番線＝上り副本線。図の線は番線単位では分かれていないため、5番線の列車は上り線に表示します。</p>
     </details>`;
   }
 
-/* 駅詳細：西鉄福岡(天神)（頭端式3線）
-行き先・種別ごとの専用ホームはないため、番線の固定割当は描かず、
-列車は発車（下り）／到着（上り）のレベルでだけ示す */
-function cmdTenjinHTML(dg) {
-const stn = '福岡(天神)';
-const ros = rosterNos().set;
-const keep = tkbKeep(ros, CMD.filter);
-const list = [];
-dg.live.forEach((t) => { if (t.idx === 0) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim:!keep(t.no, t.delay, 'live')});});
-dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim:!keep(g.no, 0, 'ghost')});});
-(dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim:!keep(t.no, 0, 'dead')});});
-const dep = list.filter((it) => it.dir === 'down');
-const arr = list.filter((it) => it.dir!== 'down');
-const chips = tkbRow(dep, 490, 204) + tkbRow(arr, 490, 232);
-return `<details class="cmd-track" open>
-<summary>駅詳細：西鉄福岡(天神)<span>頭端式 3線／専用ホームなし・番線は特定しない</span></summary>
-<div class="cmdb tkb-detail">
-<svg class="tkb-svg" width="980" height="266" viewBox="0 0 980 266" role="img" aria-label="西鉄福岡天神駅配線図">
-<text class="sub" x="950" y="26" text-anchor="end">薬院・大牟田方面 ▶</text>
-<line class="buf" x1="70" y1="52" x2="70" y2="176"></line>
-<line class="ln" x1="70" y1="64" x2="760" y2="64"></line>
-<line class="ln" x1="70" y1="114" x2="760" y2="114"></line>
-<line class="ln" x1="70" y1="164" x2="760" y2="164"></line>
-<path class="ln2" d="M760 64 L830 114 M760 114 L830 114 M760 164 L830 114 M800 64 L845 114 M845 64 L800 114"></path>
-<line class="ln" x1="830" y1="96" x2="965" y2="96"></line>
-<line class="ln" x1="830" y1="132" x2="965" y2="132"></line>
-<text class="sub" x="880" y="86">上り本線</text>
-<text class="sub" x="880" y="152">下り本線</text>
-<rect class="plat" x="110" y="42" width="480" height="12" rx="3"></rect>
-<rect class="plat" x="110" y="78" width="480" height="15" rx="3"></rect>
-<rect class="plat" x="110" y="128" width="480" height="15" rx="3"></rect>
-<rect class="plat" x="110" y="178" width="480" height="12" rx="3"></rect>
-<text class="dep-t" x="600" y="52">降車ホーム</text>
-<text class="dep-t" x="600" y="89">1番のりば（乗車）</text>
-<text class="dep-t" x="600" y="139">2番のりば（乗車）／降車ホーム</text>
-<text class="dep-t" x="600" y="188">3番のりば（乗車）</text>
-<text class="sub" x="30" y="208">発車（下り）</text>
-<text class="sub" x="30" y="236">到着（上り）</text>
-<text class="sub" x="465" y="258" text-anchor="middle">※ 西鉄福岡（天神）に行き先・種別ごとの専用ホームはありません。番線はその都度変わるため、この図では番線を特定せず発着レベルで表示しています</text>
-${chips}
-</svg>
-</div>
-</details>`;
-}
+  /* 駅詳細：西鉄福岡(天神)（頭端式3線）
+     v32：手描きSVGをやめ、実物の配線略図（天神付近の拡大）を土台にする。
+     行き先・種別ごとの専用ホームはないため番線は特定せず、発車（下り）は
+     ターミナル部の上側の線（y=53・実測）、到着（上り）は下側の線（y=79・実測）に置く */
+  function cmdTenjinHTML(dg) {
+    const stn = '福岡(天神)';
+    const ros = rosterNos().set;
+    const keep = tkbKeep(ros, CMD.filter);
+    const list = [];
+    dg.live.forEach((t) => { if (t.idx === 0) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim: !keep(t.no, t.delay, 'live') }); });
+    dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim: !keep(g.no, 0, 'ghost') }); });
+    (dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim: !keep(t.no, 0, 'dead') }); });
+    const markers = list.map((it) => it.dir === 'down' ? { it, x: 170, y: 53 } : { it, x: 170, y: 79 });
+    return `<details class="cmd-track" open>
+      <summary>駅詳細：西鉄福岡(天神)<span>頭端式 3線／専用ホームなし・番線は特定しない</span></summary>
+      ${tkdetHTML(TKDET_TEN, markers, '西鉄福岡(天神)駅 配線略図（天神付近の拡大）')}
+      <p class="cmd-note det-note">配線略図（天神付近の拡大）に表示しています。発車（下り）はターミナル部の上側の線、到着（上り）は下側の線に置いています。西鉄福岡（天神）に行き先・種別ごとの専用ホームはなく、番線はその都度変わるため特定しません。</p>
+    </details>`;
+  }
 
   function cmdTrackDetailsHTML(dg) {
     return `${cmdFutsukaichiHTML(dg)}
       ${cmdTenjinHTML(dg)}
       <p class="cmd-foot">番線レベルの配置は推定です：在線データは駅ブロック単位のため、西鉄二日市の番線は種別・行先と番線ルール（太宰府直通は4番線＝下り副本線／太宰府線シャトルは1番のりば／追い越し時は追い越される列車が副本線・追い越す列車が主本線）にもとづいて置いています。西鉄福岡（天神）には行き先・種別ごとの専用ホームがないため、番線を特定せず発着レベルで表示しています。実際の番線は駅の案内・指令の指示でご確認ください。</p>
-      <p class="cmd-foot">配線図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）をそのまま使用しています。列車の位置は駅ブロック単位で図の線路上に重ねて表示しており、番線レベルの特定はしません。貝塚線は在線情報の対象外のため列車は表示されません。</p>`;
+      <p class="cmd-foot">配線図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を使用しています（貝塚線の段は切り取って除いています）。列車の位置は駅ブロック単位で図の線路上に重ねて表示しており、番線レベルの特定はしません。チップは線路の真上に小さく表示し、上の線が下り線・下の線が上り線です。遅延はチップ右上の小さな数字で示します。</p>`;
   }
 
   function cmdBranchHTML(dt) {

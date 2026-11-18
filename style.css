@@ -899,60 +899,12 @@ html[data-theme="light"] .rail-row.branch { color: #2f5fd0; }
 .cmd-track > summary:before { content: "＋"; font-size: 9px; color: #6c8093; }
 .cmd-track[open] > summary:before { content: "−"; }
 .cmd-track > summary span { font-size: 9px; font-weight: 600; color: #6c8093; }
-.cmdb.tkb-detail { padding: 4px 0 6px; }
-.tkb-svg { display: block; }
-.tkb-svg text { font-family: inherit; }
-.tkb-svg .ln { stroke: #c7d5e0; stroke-width: 2.5; fill: none; }
-.tkb-svg .ln2 { stroke: #c7d5e0; stroke-width: 1.6; fill: none; }
-.tkb-svg .buf { stroke: #c7d5e0; stroke-width: 3.5; }
-.tkb-svg .dzl { stroke: #3fb950; stroke-width: 2.5; fill: none; }
-.tkb-svg .agl { stroke: #bc8cff; stroke-width: 2.5; fill: none; }
-.tkb-svg .sdl { stroke: #5a6a7a; stroke-width: 1.6; fill: none; }
-.tkb-svg .dash { stroke: #8b98a5; stroke-width: 1.6; stroke-dasharray: 4 3; fill: none; }
-.tkb-svg .dash2 { stroke-dasharray: 5 4; }
-.tkb-svg .plat { fill: #3a4654; stroke: #5a6a7a; }
-.tkb-svg .depot { fill: #26303c; stroke: #5a6a7a; }
-.tkb-svg .stn { fill: #07101a; stroke: #9db4c6; stroke-width: 2; }
-.tkb-svg .stn.major { fill: #6fd3ff; stroke: #6fd3ff; }
-.tkb-svg .stn.dz-stn { stroke: #3fb950; }
-.tkb-svg .stn.ag-stn { stroke: #bc8cff; }
-.tkb-svg .tx { fill: #e8edf2; font-size: 12px; }
-.tkb-svg .txb { fill: #e8edf2; font-size: 12.5px; font-weight: 700; }
-.tkb-svg .sub { fill: #8b98a5; font-size: 10.5px; }
-.tkb-svg .code { fill: #566f83; font-size: 7.5px; font-family: ui-monospace, monospace; }
-.tkb-svg .mj { fill: #e3f2fd; font-size: 11px; font-weight: 700; }
-.tkb-svg .dz-t { fill: #3fb950; }
-.tkb-svg .ag-t { fill: #bc8cff; }
-.tkb-svg .rule { fill: #f0c674; font-size: 11.5px; font-weight: 700; }
-.tkb-svg .dep-t { fill: #c9d4e0; font-size: 11px; }
-.tkb-svg .nm { fill: #c9d4e0; font-size: 9.5px; }
-.tkb-svg .nm.major { fill: #e3f2fd; font-weight: 700; }
-.tkb-svg .conn-c { fill: #6fd3ff; }
-.tkb-svg .conn { fill: #0b1520; font-size: 10px; font-weight: 700; }
-.tkb-svg .yard { stroke: #5a6a7a; stroke-width: 1.4; fill: none; }
-.cmdb.tkb-row { margin-bottom: 6px; }
-.tkb-chip { cursor: pointer; }
-.tkb-chip text {
-  font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700;
-  text-anchor: middle; fill: #cfe1ef;
-}
-.tkb-chip rect.body { fill: #111f2a; stroke: #2b4155; }
-.tkb-chip.ltd rect.body { fill: #2a1414; stroke: #6b2b28; }
-.tkb-chip.ltd text { fill: #ff9b93; }
-.tkb-chip.exp rect.body { fill: #0e241d; stroke: #1e5e49; }
-.tkb-chip.exp text { fill: #6ee7b7; }
-.tkb-chip.loc rect.body { fill: #101d2c; stroke: #24476b; }
-.tkb-chip.loc text { fill: #8ec2f7; }
-.tkb-chip.dead rect.body { fill: #161a1f; stroke: #2e3742; }
-.tkb-chip.dead text { fill: #9aa4b5; }
-.tkb-chip rect.ring { fill: none; stroke: #f5b23c; stroke-width: 2; }
-.tkb-chip.branch rect.body { stroke-dasharray: 4 3; }
-.tkb-chip.ghost rect.body { fill: #1d1010; stroke: #7a2e2a; stroke-dasharray: 4 3; }
-.tkb-chip.ghost text { fill: #ff9b93; }
-.tkb-chip.dim { opacity: .2; }
-.tkb-chip.sel rect.body { stroke: #fff; stroke-width: 2; }
+/* ---- 駅詳細（v32：配線略図の切り出し拡大＋小さなマーカー） ---- */
+.tkb-det-wrap { position: relative; overflow: hidden; line-height: 0; background: #212121; }
+.tkb-det-map { position: absolute; max-width: none; user-select: none; -webkit-user-drag: none; }
+.det-note { padding: 6px 2px 2px; line-height: 1.7; }
 
-/* ---- 配線図ボード（v31：実物の配線略図画像＋チップ重ね） ---- */
+/* ---- 配線図ボード（v32：配線略図画像＋小さなチップ重ね） ---- */
 .cmdb.tkb-img { padding: 0; background: #212121; }
 .tkb-img-inner { min-width: 100%; }
 .tkb-img-wrap { position: relative; line-height: 0; background: #212121; }
@@ -960,10 +912,17 @@ html[data-theme="light"] .rail-row.branch { color: #2f5fd0; }
 .tkb-img .img-chip {
   position: absolute; z-index: 2; transform: translate(-50%, -50%);
   display: flex; align-items: center; justify-content: center;
-  height: 21px; padding: 0 6px; border-radius: 5px; border: 1px solid #2b4155;
+  height: 13px; padding: 0 4px; border-radius: 3px; border: 1px solid #2b4155;
   background: #111f2a; color: #cfe1ef; font-family: ui-monospace, monospace;
-  font-size: 11px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap;
-  cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .6);
+  font-size: 8.5px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap;
+  line-height: 1; cursor: pointer; box-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+}
+.tkb-img .img-chip .dl {
+  position: absolute; top: -6px; right: -7px; z-index: 3;
+  display: flex; align-items: center; justify-content: center;
+  height: 10px; min-width: 15px; padding: 0 2px; border-radius: 5px;
+  background: #f5b23c; color: #231600; font-size: 7px; font-weight: 800;
+  font-style: normal; letter-spacing: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .55);
 }
 .tkb-img .img-chip.ltd { background: #2a1414; color: #ff9b93; border-color: #6b2b28; }
 .tkb-img .img-chip.exp { background: #0e241d; color: #6ee7b7; border-color: #1e5e49; }
