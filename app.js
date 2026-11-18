@@ -1595,7 +1595,8 @@
       ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
         uses.map((u) => `<div class="res-card" data-goto="${u.p.id}:${u.d.row}">
           <div class="t"><span class="badge work">${u.p.label}</span><span class="badge off">${CIRC[u.d.dutyNo - 1]}</span>
-          <span class="run">${u.lg ? `${fmtT(u.lg.bt)} ${esc(u.lg.bn)} → ${fmtT(u.lg.at)} ${esc(u.lg.an)}` : u.d.row + '日目'}</span></div></div>`).join('') : ''}`);
+          <span class="run">${u.lg ? `${fmtT(u.lg.bt)} ${esc(u.lg.bn)} → ${fmtT(u.lg.at)} ${esc(u.lg.an)}` : u.d.row + '日目'}</span></div></div>`).join('') : ''}
+      <div class="btn-row tight"><button class="btn small" data-cmd="${esc(no)}">指令室で見る</button></div>`);
     $$('[data-goto]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => {
       const [pid, r] = el.dataset.goto.split(':');
       closeSheet(); setTimeout(() => openDuty(pid, +r), 80);
@@ -1933,7 +1934,7 @@
       if (w >= 26 && perMin >= 1.4) {
         const mid = L.pts[Math.floor(L.pts.length / 2)];
         const my = Y(mid.r);
-        svg += `<text class="dg-label" x="${X(mid.t).toFixed(1)}" y="${(my - 2).toFixed(1)}" text-anchor="middle">${esc(label)}</text>`;
+        svg += `<text class="dg-label" x="${X(mid.t).toFixed(1)}" y="${(my - 2).toFixed(1)}" text-anchor="middle">${esc(label)}${pi && pi.state === 'delay' ? `<tspan class="dg-dl" dx="1">+${pi.delay}</tspan>` : ''}${pi && pi.state === 'missing' ? '<tspan class="dg-dl lost" dx="1">⚠</tspan>' : ''}</text>`;
         if (esApplies(dt)) {
           const ci = esCarsOf(label);
           if (ci && !ci.none) {
@@ -2043,7 +2044,8 @@
       ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
         uses.map((u) => `<div class="res-card" data-goto="${u.pp.id}:${u.dd.row}">
           <div class="t"><span class="badge work">${u.pp.label}</span><span class="badge off">${CIRC[u.dd.dutyNo - 1]}</span>
-          <span class="run">${u.dd.row}日目 ${esc(firstDep(u.dd))}→${esc(lastRet(u.dd))}</span></div></div>`).join('') : ''}`);
+          <span class="run">${u.dd.row}日目 ${esc(firstDep(u.dd))}→${esc(lastRet(u.dd))}</span></div></div>`).join('') : ''}
+      <div class="btn-row tight"><button class="btn small" data-cmd="${esc(no)}">指令室で見る</button></div>`);
     $$('[data-goto]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => {
       const [pid, r] = el.dataset.goto.split(':');
       closeSheet(); setTimeout(() => openDuty(pid, +r), 80);
@@ -2253,6 +2255,7 @@
             <div class="t"><span class="no">${esc(r.no)}</span><span class="type ${typeClass(r.type)}">${esc(typeShort(r.type))}</span>
             <span class="run">${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}</span></div>
             <div class="d">${dt === 'weekday' ? '平日' : '土日祝'}${r.set ? ' ・ ' + esc(r.set) : ''}</div>
+            ${dt === todayType() ? posBadge(r.no, dt) : ''}
           </div>`).join('');
       }
       const codeEntry = D.codes.find((c) => c.code === q || c.name === q || (c.station && c.station === q));

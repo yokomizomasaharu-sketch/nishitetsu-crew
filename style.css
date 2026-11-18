@@ -995,3 +995,5 @@ button.pos-line.warn { color: var(--ltd); }
 .tchip { padding: 6px 11px; font-size: 12px; }
 .range-row input[type="time"] { padding: 8px 10px; font-size: 14px; }
 .btn.primary.small { padding: 8px 12px; font-size: 12.5px; }
+.dg-dl { font-size: 7px; font-weight: 800; fill: var(--weekly); }
+.dg-dl.lost { fill: var(--ltd); }
