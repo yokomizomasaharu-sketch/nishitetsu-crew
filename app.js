@@ -18,6 +18,8 @@
   };
   const hm = (t) => String(t || '').replace(':', '<span class="colon">:</span>');
   const fmtDur = (m) => (m == null ? '' : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`);
+  const fmtT = (m) => (m == null ? '—' : `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, '0')}`);
+  const stName = (code) => ((CODE_INFO[code] || {}).name || code);
   const HW = { 'ﾌ': 'フ', 'ﾊ': 'ハ', 'ﾁ': 'チ', 'ﾖ': 'ヨ', 'ﾆ': 'ニ', 'ｺ': 'コ', 'ﾊﾞ': 'バ' };
   const pretty = (s) => String(s == null ? '' : s).replace(/[\uFF66-\uFF9D]/g, (c) => HW[c] || c);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -104,6 +106,8 @@
   const lastRet = (d) => d.duties[d.duties.length - 1].ret;
   const routeText = (d) => d.duties.map((x) => `${pretty(x.start)} → ${pretty(x.end)}`).join('　／　');
   const trainList = (d, dt) => tokenize(d.system || '').filter((t) => t.kind === 'train');
+  const legsOf = (d) => (d && d.legs) || [];
+  const shortName = (code) => SHORT[stName(code)] || stName(code);
 
   /* ================= ROSTER ================= */
   function renderRoster(main) {
@@ -216,7 +220,7 @@
     const fake = {
       row: 0, kind: 'work', dutyNo: p.days[p.days.length - 1].dutyNo,
       duties: [{ dep: x.dep, ret: x.ret, start: x.start, end: x.end, kousoku: x.kousoku, kousokuMin: 0 }],
-      system: x.system,
+      system: x.system, legs: x.legs || [],
     };
     showSheet(dutyHeader(p, fake, x.name) + flowStrip(fake, p.dayType) + dutyBody(p, fake, p.dayType), () => {
       $$('[data-train]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => openTrain(el.dataset.train)));
@@ -239,32 +243,32 @@
 
   /* big horizontal "1日の流れ" */
   function flowStrip(d, dt) {
-    const trains = trainList(d, dt);
-    if (!trains.length) return '';
+    const legs = legsOf(d);
+    if (!legs.length) return '';
     let items = `<div class="flow-item dep">
         <div class="fi-time">${esc(firstDep(d))}</div>
         <div class="fi-main">出勤</div>
         <div class="fi-sub">${esc(d.duties[0].start)}</div>
       </div><div class="flow-sep"></div>`;
-    trains.forEach((t, i) => {
-      const r = trainRec(dt, t.v);
+    legs.forEach((lg, i) => {
+      const r = trainRec(dt, lg.t[0]);
       const cls = typeClass(r && r.type);
-      items += `<div class="flow-item train ${cls}" data-train="${esc(t.v)}">
-        <div class="fi-time">${esc(r ? r.dep : '—')}</div>
-        <div class="fi-main"><span class="no">${esc(t.v)}</span><span class="type ${cls}">${esc(typeShort(r && r.type))}</span></div>
-        <div class="fi-sub">${esc(r ? canon(r.from) + '→' + canon(r.to) : 'データなし')}</div>
-        <div class="fi-end">${esc(r ? r.arr : '')}</div>
+      items += `<div class="flow-item train ${cls}${lg.flag === 'conflict' ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
+        <div class="fi-time">${fmtT(lg.bt)}</div>
+        <div class="fi-main"><span class="no">${esc(lg.t.join('→'))}</span><span class="type ${cls}">${esc(typeShort(r && r.type))}</span></div>
+        <div class="fi-sub">${esc(stName(lg.b))} → ${esc(stName(lg.a))}</div>
+        <div class="fi-end">${fmtT(lg.at)} ${esc(shortName(lg.a))}</div>
       </div>`;
-      if (i < trains.length - 1) items += '<div class="flow-sep"></div>';
+      if (i < legs.length - 1) items += '<div class="flow-sep"></div>';
     });
     items += `<div class="flow-sep"></div><div class="flow-item ret">
         <div class="fi-time">${esc(lastRet(d))}</div>
         <div class="fi-main">退勤</div>
         <div class="fi-sub">${esc(d.duties[d.duties.length - 1].end)}</div>
       </div>`;
-    return `<div class="flow-block"><h4 class="tl-title">1日の流れ（${trains.length}列車）</h4>
+    return `<div class="flow-block"><h4 class="tl-title">1日の流れ（${legs.length}区間）</h4>
       <div class="flow">${items}</div>
-      <p class="flow-note">各列車の時刻は始発・終着のもの。乗務区間は乗務系統（下段）を参照。</p></div>`;
+      <p class="flow-note">時刻は<b>乗り込む駅の発車〜降りる駅の到着</b>（西鉄公式時刻表）。列車の始発・終着は各列車の詳細で確認できます。</p></div>`;
   }
 
   function memoBox(key) {
@@ -290,61 +294,52 @@
             : t.kind === 'ws' ? ' '
             : `<span class="tok-mark">${esc(t.v)}</span>`).join('')}</div>
       </div>
-      <h4 class="tl-title">乗務タイムライン</h4>
-      ${renderTimeline(d.system, dt)}
+      <h4 class="tl-title">乗務タイムライン（乗り込み駅 → 降りる駅）</h4>
+      ${renderTimeline(d, dt)}
       <div class="btn-row">
         <button class="btn primary" data-diagram="${p.id}:${d.row}">箱ダイヤで見る</button>
         <button class="btn" data-symbols>記号の見方</button>
       </div>`;
   }
 
-  function renderTimeline(sys, dt) {
-    const toks = tokenize(sys);
+  function renderTimeline(d, dt) {
+    const legs = legsOf(d);
+    if (!legs.length) return '<div class="empty">乗務区間を取得できませんでした。</div>';
     let html = '<ul class="tl">';
-    let buf = [];
-    const flush = () => {
-      if (!buf.length) return;
-      if (buf.length === 1) {
-        html += trainCardHTML(buf[0], dt);
-      } else {
-        html += `<li class="train"><div class="train-card group">
-          <div class="tc-top"><span class="type dead">便乗</span><span class="run">${buf.length}本</span></div>
-          <div class="tok-wrap">${buf.map((t) => `<span class="mini ${typeClass((trainRec(dt, t) || {}).type)}" data-train="${esc(t)}">${esc(t)}</span>`).join('')}</div>
-        </div></li>`;
-      }
-      buf = [];
-    };
-    for (const t of toks) {
-      if (t.kind === 'train') { buf.push(t.v); continue; }
-      if (t.kind === 'ws') continue;
-      if (t.kind === 'mark' && ['(', ')', '普'].includes(t.v)) continue;
-      flush();
-      if (t.kind === 'stn') html += `<li class="stn"><div class="note">${stationPill(t.v, true)}</div></li>`;
-      else if (t.kind === 'mark') html += `<li class="mark"><div class="note"><b>${esc(t.v)}</b>${markDesc(t.v)}</div></li>`;
-    }
-    flush();
+    legs.forEach((lg, i) => {
+      const r = trainRec(dt, lg.t[0]);
+      const cls = typeClass(r && r.type);
+      const warn = lg.flag === 'conflict';
+      html += `<li class="train"><div class="train-card ${cls}${warn ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
+        <div class="tc-top">
+          <span class="no">${esc(lg.t.join('→'))}</span>
+          <span class="type ${cls}">${esc(typeShort(r && r.type))}</span>
+          ${warn ? `<span class="flag" title="原本の系統表記と公式時刻の整合が取れていません">⚠ 要確認</span>` : ''}
+          <span class="run">${(lg.marks || []).filter((m) => m === '×' || m === '換').map((m) => `<em class="mk">${esc(m)}</em>`).join('')}</span>
+        </div>
+        <div class="leg">
+          <div class="leg-row">
+            <span class="leg-k">乗</span><b class="leg-t">${fmtT(lg.bt)}</b><span class="leg-s">${esc(stName(lg.b))}</span>
+            <span class="leg-arrow">→</span>
+            <span class="leg-k">降</span><b class="leg-t">${fmtT(lg.at)}</b><span class="leg-s">${esc(stName(lg.a))}</span>
+          </div>
+        </div>
+        ${r ? `<div class="sub">全区間 ${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : '<div class="sub">列車データが見つかりません</div>'}
+        ${lg.flag === 'whole' ? '<div class="sub">※ 乗務区間の途中時刻を原本から特定できず、列車の全区間を表示しています</div>' : ''}
+      </div></li>`;
+      const mk = (lg.marks || []).filter((m) => MARK_INFO[m]);
+      if (mk.length) html += `<li class="mark"><div class="note">${mk.map((m) => `<b>${esc(m)}</b>${markDesc(m)}`).join(' ')}</div></li>`;
+    });
     return html + '</ul>';
   }
 
+  const MARK_INFO = {
+    出: '（出庫）', 入: '（入庫）', 換: '（車両交換・乗り換え）', 便: '（便乗）',
+    '×': '（入れ替え・同じ車両で続行）', '~': '（同一編成で続行）', 解放: '（車両解放）',
+    H: '（構内留置）', 普: '（同じ車両のまま列番変更）',
+  };
   function markDesc(v) {
-    const map = { 出: '（出庫）', 入: '（入庫）', 換: '（車両交換・乗換）', 便: '（便乗）', '×': '（回送）', '~': '（同一編成）', 解放: '（車両解放）', H: '（構内留置）', 普: '（普通）' };
-    return map[v] ? `<span class="md">${map[v]}</span>` : '';
-  }
-
-  function trainCardHTML(no, dt) {
-    const r = trainRec(dt, no);
-    const cls = typeClass(r && r.type);
-    if (!r) return `<li class="train"><div class="train-card dead"><div class="tc-top">
-        <span class="no">${esc(no)}</span><span class="type dead">未収録</span></div>
-        <div class="sub">列車データが見つかりません</div></div></li>`;
-    return `<li class="train"><div class="train-card ${cls}" data-train="${esc(no)}">
-      <div class="tc-top">
-        <span class="no">${esc(no)}</span>
-        <span class="type ${cls}">${esc(typeShort(r.type))}</span>
-        <span class="run"><b>${esc(r.dep)}</b> ${esc(canon(r.from))}<i>→</i><b>${esc(r.arr)}</b> ${esc(canon(r.to))}</span>
-      </div>
-      ${(r.set || r.carType) ? `<div class="sub">${r.set ? esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : ''}
-    </div></li>`;
+    return MARK_INFO[v] ? `<span class="md">${MARK_INFO[v]}</span>` : '';
   }
 
   /* ================= TRAIN SHEET ================= */
@@ -357,13 +352,16 @@
       </div>` : '';
     const uses = [];
     for (const p of D.patterns) for (const d of p.days)
-      if (d.system && tokenize(d.system).some((t) => t.kind === 'train' && t.v === no)) uses.push({ p, d });
+      if (d.system && tokenize(d.system).some((t) => t.kind === 'train' && t.v === no)) {
+        const lg = (d.legs || []).find((x) => x.t.includes(no));
+        uses.push({ p, d, lg });
+      }
     showSheet(`<div class="sheet-head"><h2>列車 ${esc(no)}</h2><button class="sheet-close" data-close>✕</button></div>
       ${card('平日', w)}${card('土日祝', h)}
       ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
         uses.map((u) => `<div class="res-card" data-goto="${u.p.id}:${u.d.row}">
           <div class="t"><span class="badge work">${u.p.label}</span><span class="badge off">${CIRC[u.d.dutyNo - 1]}</span>
-          <span class="run">${u.d.row}日目</span></div></div>`).join('') : ''}`);
+          <span class="run">${u.lg ? `${fmtT(u.lg.bt)} ${esc(stName(u.lg.b))} → ${fmtT(u.lg.at)} ${esc(stName(u.lg.a))}` : u.d.row + '日目'}</span></div></div>`).join('') : ''}`);
     $$('[data-goto]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => {
       const [pid, r] = el.dataset.goto.split(':');
       closeSheet(); setTimeout(() => openDuty(pid, +r), 80);
@@ -450,17 +448,18 @@
   }
 
   function diagramSVG(d, dt) {
-    const toks = tokenize(d.system || '');
+    const legs = legsOf(d);
     const segs = [];
-    for (const t of toks) {
-      if (t.kind !== 'train') continue;
-      const r = trainRec(dt, t.v);
-      if (!r) continue;
-      const a = IDX[canon(r.from)], b = IDX[canon(r.to)];
-      if (a == null || b == null) { segs.push({ skip: true, no: t.v }); continue; }
-      segs.push({ no: t.v, r, a, b, t1: toMin(r.dep), t2: toMin(r.arr), cls: typeClass(r.type) });
+    const toIdx = (name) => (IDX[name] != null ? IDX[name] : (name === '西鉄福岡(天神)' ? IDX['福岡(天神)'] : null));
+    for (const lg of legs) {
+      const a = toIdx(stName(lg.b)), b = toIdx(stName(lg.a));
+      if (a == null || b == null) { segs.push({ skip: true, no: lg.t.join('/') }); continue; }
+      const r = trainRec(dt, lg.t[0]);
+      segs.push({ no: lg.t.join('→'), r, a, b, t1: lg.bt, t2: lg.at,
+        cls: typeClass(r && r.type), flag: lg.flag,
+        bt: lg.bt, at: lg.at, bname: stName(lg.b), aname: stName(lg.a) });
     }
-    const draw = segs.filter((x) => !x.skip);
+    const draw = segs.filter((x) => !x.skip && x.t1 != null && x.t2 != null);
     if (!draw.length) return { svg: '<div class="empty">この行路の列車データがありません</div>', rail: '' };
     const dep = toMin(firstDep(d)), ret = toMin(lastRet(d));
     const t0 = Math.floor((Math.min(dep, ...draw.map((x) => x.t1)) - 15) / 30) * 30;
@@ -492,7 +491,7 @@
     svg += `<line class="dg-mark" x1="${X(ret).toFixed(1)}" y1="${topH - 10}" x2="${X(ret).toFixed(1)}" y2="${H - botH + 6}"/>`;
     svg += `<text class="dg-hinttxt" x="${(X(ret) - 3).toFixed(1)}" y="${topH - 4}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
     draw.forEach((g) => {
-      svg += `<line class="dg-line ${g.cls}" x1="${X(g.t1).toFixed(1)}" y1="${Y(g.a)}" x2="${X(g.t2).toFixed(1)}" y2="${Y(g.b)}" data-train="${esc(g.no)}"><title>${esc(g.no)} ${esc(g.r.type)} ${esc(g.r.dep)} ${esc(canon(g.r.from))} → ${esc(g.r.arr)} ${esc(canon(g.r.to))}</title></line>`;
+      svg += `<line class="dg-line ${g.cls}${g.flag === 'conflict' ? ' warn' : ''}" x1="${X(g.t1).toFixed(1)}" y1="${Y(g.a)}" x2="${X(g.t2).toFixed(1)}" y2="${Y(g.b)}" data-train="${esc(g.no)}"><title>${esc(g.no)} ${esc(g.r ? g.r.type : '')}　乗務区間 ${fmtT(g.bt)} ${esc(g.bname)} → ${fmtT(g.at)} ${esc(g.aname)}</title></line>`;
       const mx = (X(g.t1) + X(g.t2)) / 2, my = (Y(g.a) + Y(g.b)) / 2;
       svg += `<text class="dg-label" x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle">${esc(g.no)}</text>`;
     });
@@ -513,7 +512,7 @@
     { label: '15:00〜18:00', r: '900-1080' },
     { label: '18:00〜', r: '1080-1560' },
   ];
-  const searchState = { mode: 'report', place: '', range: '', from: '', to: '', dt: 'all' };
+  const searchState = { mode: 'report', place: '', range: '', from: '', to: '', dt: 'all', exact: '' };
 
   function reportIndex() {
     const rows = [];
@@ -563,6 +562,16 @@
       </div>
       <div class="filter-block">
         <div class="filter-label">② 出勤時刻</div>
+        <div class="pin-block">
+          <div class="pin-label">ピンポイント時刻（正確な出勤時刻で1発特定）</div>
+          <div class="range-row">
+            <input type="time" id="pinTime" step="60" value="${searchState.exact || ''}" aria-label="出勤時刻をピンポイント指定">
+            <button class="btn primary small" id="pinGo">この時刻で探す</button>
+            ${searchState.exact ? '<button class="btn small" id="pinClear">解除</button>' : ''}
+          </div>
+          <p class="pin-hint">例：7:06 → 7:06出勤の勤務だけを表示（時刻は輪番表の出勤時刻）</p>
+        </div>
+        <div class="filter-label sub">時間帯・範囲から探す</div>
         <div class="time-chips" id="timeChips">
           ${TIME_PRESETS.map((t) => `<button class="tchip ${searchState.range === t.r ? 'on' : ''}" data-r="${t.r}">${t.label}</button>`).join('')}
         </div>
@@ -585,24 +594,33 @@
 
     const apply = () => {
       let from = null, to = null;
+      const exact = searchState.exact ? toMin(searchState.exact) : null;
       if (searchState.range) {
         const [a, b] = searchState.range.split('-');
         from = +a; to = +b;
-      } else if (searchState.from || searchState.to) {
+      } else if (!searchState.exact && (searchState.from || searchState.to)) {
         from = searchState.from ? toMin(searchState.from) : 0;
         to = searchState.to ? toMin(searchState.to) : 24 * 60 + 120;
       }
       const hits = rows.filter((r) => {
         if (searchState.place && r.place !== searchState.place) return false;
         if (searchState.dt !== 'all' && r.p.dayType !== searchState.dt) return false;
+        if (exact != null) return r.dep === exact;
         if (from != null && (r.dep == null || r.dep < from)) return false;
         if (to != null && (r.dep == null || r.dep >= to)) return false;
         return true;
       }).sort((a, b) => a.dep - b.dep);
       const res = $('#reportRes');
-      if (!hits.length) { res.innerHTML = '<div class="empty">条件に合う勤務がありません</div>'; return; }
-      res.innerHTML = `<div class="res-summary">${searchState.place ? esc(placeLabel(searchState.place)) + '発 ・ ' : ''}該当 ${hits.length}件<span>（出勤時刻順）</span></div>
-        ${hits.map((r) => `<div class="res-card" data-goto="${r.p.id}:${r.d.row}">
+      if (!hits.length) {
+        res.innerHTML = exact != null
+          ? `<div class="empty">${esc(searchState.exact)} 出勤の勤務はありません${searchState.place || searchState.dt !== 'all' ? '（出勤場所・ダイヤの条件を外して再検索）' : ''}</div>`
+          : '<div class="empty">条件に合う勤務がありません</div>';
+        return;
+      }
+      const head = exact != null
+        ? `<div class="res-summary pin"><b>${esc(searchState.exact)} 出勤</b>の勤務 ${hits.length}件<span>${searchState.place ? '・' + esc(placeLabel(searchState.place)) + '発' : ''}${searchState.dt === 'all' ? '' : '・' + (searchState.dt === 'weekday' ? '平日' : '土日祝')}</span></div>`
+        : `<div class="res-summary">${searchState.place ? esc(placeLabel(searchState.place)) + '発 ・ ' : ''}該当 ${hits.length}件<span>（出勤時刻順）</span></div>`;
+      res.innerHTML = head + hits.map((r) => `<div class="res-card${hits.length === 1 ? ' single' : ''}" data-goto="${r.p.id}:${r.d.row}">
           <div class="t">
             <span class="pill stn" style="--pc:${CODE_COLOR[r.place] || '#7d8ca0'}"><b>${esc(r.place)}</b><i>${esc(placeLabel(r.place))}</i></span>
             <span class="dep-big">${esc(firstDep(r.d))}</span>
@@ -610,23 +628,34 @@
             <span class="badge off">${CIRC[r.d.dutyNo - 1]}</span>
           </div>
           <div class="d">${r.d.row}日目　${esc(firstDep(r.d))}→${esc(lastRet(r.d))}　拘束 ${fmtDur(totalKousoku(r.d))}　${esc(routeText(r.d))}</div>
-        </div>`).join('')}`;
+          ${hits.length === 1 ? '<div class="open-hint">タップでこの行路の詳細を開く ›</div>' : ''}
+        </div>`).join('');
       $$('[data-goto]', res).forEach((el) => el.addEventListener('click', () => {
         const [pid, row] = el.dataset.goto.split(':');
         openDuty(pid, +row);
       }));
     };
 
+    const pinGo = $('#pinGo');
+    if (pinGo) pinGo.addEventListener('click', () => {
+      const v = $('#pinTime').value;
+      searchState.exact = v || '';
+      if (v) { searchState.range = ''; searchState.from = ''; searchState.to = ''; }
+      render();
+    });
+    const pinClr = $('#pinClear');
+    if (pinClr) pinClr.addEventListener('click', () => { searchState.exact = ''; render(); });
+    const pinT = $('#pinTime');
+    if (pinT) pinT.addEventListener('change', () => { if (pinT.value) { searchState.exact = pinT.value; searchState.range = ''; searchState.from = ''; searchState.to = ''; render(); } });
+
     $('#placeChips').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-place]'); if (!b) return;
-      searchState.place = b.dataset.place; searchState.range = ''; searchState.from = ''; searchState.to = '';
-      $$('#placeChips .pchip').forEach((x) => x.classList.toggle('on', x === b));
-      $$('#timeChips .tchip').forEach((x) => x.classList.toggle('on', x.dataset.r === ''));
-      apply();
+      searchState.place = b.dataset.place; searchState.exact = '';
+      render();
     });
     $('#timeChips').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-r]'); if (!b) return;
-      searchState.range = b.dataset.r; searchState.from = ''; searchState.to = '';
+      searchState.range = b.dataset.r; searchState.from = ''; searchState.to = ''; searchState.exact = '';
       $('#tFrom').value = ''; $('#tTo').value = '';
       $$('#timeChips .tchip').forEach((x) => x.classList.toggle('on', x === b));
       apply();
@@ -639,7 +668,7 @@
     });
     $('#applyRange').addEventListener('click', () => {
       searchState.from = $('#tFrom').value; searchState.to = $('#tTo').value;
-      searchState.range = '';
+      searchState.range = ''; searchState.exact = '';
       $$('#timeChips .tchip').forEach((x) => x.classList.toggle('on', false));
       apply();
     });
@@ -719,6 +748,12 @@
       <div class="sym-grid">${st.map((c) => `<div class="sym"><span class="pill stn" style="--pc:${CODE_COLOR[c.code]}"><b>${esc(c.code)}</b><i>${esc(c.name)}</i></span></div>`).join('')}</div>
       <h4 class="tl-title" style="margin-top:14px">動作・マーク</h4>
       <div class="sym-list">${mk.map((c) => `<div><b>${esc(c.code)}</b>　${esc(c.name)}${c.note ? ` <span class="md">（${esc(c.note)}）</span>` : ''}</div>`).join('')}</div>
+      <h4 class="tl-title" style="margin-top:14px">乗務区間の表示について</h4>
+      <div class="sym-list">
+        <div><b>乗 / 降</b>　その列車に<b>乗り込む駅</b>と<b>降りる駅</b>。時刻は西鉄公式時刻表の実際の発着時刻です。</div>
+        <div><b>全区間</b>　その列車自身の始発〜終着（乗務する区間とは限りません）。</div>
+        <div><b>⚠ 要確認</b>　原本（乗務系統表）の表記と公式時刻表の整合が取れていない区間。原本をご確認ください。</div>
+      </div>
       <p class="dg-hint">※ 社内表記の読み方の一部は推定を含みます。原本と併せてご確認ください。</p>`);
   }
 
