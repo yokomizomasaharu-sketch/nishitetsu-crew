@@ -98,7 +98,7 @@
   const trainRec = (dayType, no) => ((D.trains[dayType] || {})[no] || [])[0] || null;
 
   /* 出勤場所（乗務開始の駅・基地）を系統の頭から判定
-     出庫（チ出）なら筑紫車両基地、ふつうのチは筑紫駅（交代）、ヨは予備代行で駅 */
+     出庫（チ出）なら筑紫車両基地、ふつうのチは筑紫駅（交代）、ヨは予備入出庫で駅 */
   const PLACE_RE = /^(チヨ|ハヨ|フ|チ|ハ|二|小|善|大|太|津|聖|久|甘|柳|ヤ|オ)/;
   const PLACE_LABEL = { 'チヨ': '筑紫車両基地', 'チ': '筑紫駅', 'ハヨ': '花畑車両基地', 'ハ': '花畑駅', 'ヤ': '西鉄柳川駅', 'オ': '大牟田駅' };
   const PLACE_COLOR = { 'チヨ': '#12897c', 'チ': '#22b8a6', 'ハヨ': '#7bc043', 'ハ': '#5ec14f', 'ヤ': '#38bdf8', 'オ': '#818cf8' };
@@ -1079,14 +1079,31 @@
         <i class="tick"></i><b class="tc">${esc(codes[i] || '')}</b><span class="nm">${esc(cmdName(n))}</span>${dep ? `<em class="dep">${esc(dep)}</em>` : ''}</div>`;
     }).join('');
   }
-  /* ---------- 配線図ボード（v29） ----------
-     全線略図SVG＋西鉄二日市・西鉄福岡(天神)の駅詳細配線図。
-     配線は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を参考に自作した略図。
-     在線データは駅ブロック単位までしか分からないため、番線レベルの配置は
-     種別・行先と番線ルール（二日市：太宰府直通は4番線＝下り副本線／追い越し時は
-     追い越される列車が副本線・追い越す列車が主本線、天神：種別で固定）にもとづく推定。
-     指令ビュー内にもその旨を注記する。 */
-  const TKB = { upY: 150, dnY: 176, H: 322 };
+  /* ---------- 配線図ボード（v30） ----------
+     raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）の折り返しレイアウトに沿い、
+     天神大牟田線を5段（1段10駅・接続記号A〜D）＋太宰府線・甘木線の段で描く自作SVG。
+     駅ごとの配線（待避線・渡り線・単線区間と交換駅・分岐・両車両基地のヤード・両終端の
+     頭端配線）は図面の読み取りと公開情報（各駅の線数・待避の有無）でデータ化した。
+     単線区間は聖マリア病院前以東〜大善寺と蒲池以東〜開（図面・公開情報で一致）。
+     在線チップは駅ブロック単位の位置を上下線の帯に置く（番線レベルの特定はしない）。
+     番線レベルの詳細は下部の駅詳細パネル（二日市・天神）にだけ置く。 */
+  const TKB_PAD = 44;
+  const TKB_ROWS = [
+    { from: 0, conn: 'A' }, { from: 10, conn: 'B' }, { from: 20, conn: 'C' }, { from: 30, conn: 'D' }, { from: 40, conn: null },
+  ];
+  /* 駅ごとの配線要素（MAIN の index）
+     siding=待避線（上下両側）/ scissors=両端シザーズ（久留米）/ pass=単線の交換ループ（上側）
+     passBoth=単線の両側ループ（柳川）/ stub=上側の短い側線（江の浦）/ junction=支線分岐 / yard=車両基地 */
+  const TKB_FEAT = {
+    4: { siding: 1 }, 8: { siding: 1 }, 16: { siding: 1, yard: 'chikushi' }, 21: { siding: 1 },
+    26: { siding: 1, scissors: 1 }, 27: { siding: 1 }, 31: { siding: 1 }, 44: { siding: 1 },
+    12: { junction: 'dz' }, 24: { junction: 'ag' },
+    29: { pass: 1 }, 30: { pass: 1 }, 40: { pass: 1 }, 41: { pass: 1 },
+    38: { passBoth: 1, yard: 'yanagawa' }, 42: { stub: 1 },
+  };
+  /* 単線になる駅間（始点 index の集合）と片渡り線のある駅間 */
+  const TKB_SINGLE = new Set([28, 29, 30, 36, 37, 38, 39, 40, 41, 42]);
+  const TKB_XOVER = new Set([7]);
   const tkbLabel = (it) => {
     const ts = typeShort(it.type);
     const tp = (ts === '特急' || ts === '急行' || ts === 'NL' || ts === '回送') ? ts : '';
@@ -1112,16 +1129,19 @@
       <text y="4">${esc(label)}</text>
     </g>`;
   }
-  /* 同じ線の上で近いチップ同士を上下にずらす（level: 0,-1,1,-2,2） */
-  function tkbStack(items) {
+  /* チップをボード幅でクランプし、同じ向きの帯の中で段ずらしして重なりを無くす */
+  function tkbPlace(items, W, levels) {
     const placed = [];
-    items.slice().sort((a, b) => a.x - b.x).forEach((it) => {
+    items.forEach((it) => {
       it.w = tkbChipW(tkbLabel(it));
-      let level = 2;
-      for (const L of [0, -1, 1, -2, 2]) {
-        if (!placed.some((p) => p.level === L && Math.abs(p.x - it.x) < (p.w + it.w) / 2 + 3)) { level = L; break; }
+      it.x = Math.max(it.w / 2 + 3, Math.min(W - it.w / 2 - 3, it.x));
+    });
+    items.slice().sort((a, b) => a.x - b.x).forEach((it) => {
+      let lv = levels[levels.length - 1];
+      for (const L of levels) {
+        if (!placed.some((p) => p.level === L && Math.abs(p.x - it.x) < (p.w + it.w) / 2 + 3)) { lv = L; break; }
       }
-      it.level = level;
+      it.level = lv;
       placed.push(it);
     });
   }
@@ -1136,147 +1156,195 @@
   const tkbKeep = (ros, filt) => (no, delay, kind) =>
     filt === 'all' || (filt === 'delay' && delay > 0) || (filt === 'lost' && kind === 'ghost') || (filt === 'roster' && ros.has(no));
 
-  function cmdBoardHTML(dg) {
-    const step = CMD.zoom;
-    const pad = Math.max(30, Math.round(step * 0.55));
-    const X = (i) => pad + i * step;
-    const W = Math.round(pad * 2 + (MAIN.length - 1) * step);
-    const { upY, dnY, H } = TKB;
-    const midY = (upY + dnY) / 2;
-    const ros = rosterNos().set;
-    const filt = CMD.filter;
-    const keep = tkbKeep(ros, filt);
-    const iF = MAIN.indexOf('西鉄二日市'), iC = MAIN.indexOf('筑紫'), iM = MAIN.indexOf('宮の陣');
-    const qPt = (p0, c, p1, t) => [
-      (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * c[0] + t * t * p1[0],
-      (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * c[1] + t * t * p1[1],
-    ];
-    /* 太宰府線（単線）：二日市の上り側余分線から北へ分岐 */
-    const dzP0 = [X(iF) + step * 0.2, upY - 26], dzC = [X(iF) + step * 1.3, upY - 32], dzP1 = [X(iF) + step * 2.6, 52];
-    /* 甘木線（単線）：宮の陣から南へ分岐 */
-    const agP0 = [X(iM), dnY], agC = [X(iM) + step * 1.5, dnY + 10], agP1 = [X(iM) + step * 2.8, 268];
-    const [gjX, gjY] = qPt(dzP0, dzC, dzP1, 0.5);
-
-    /* ---- 静的配線 ---- */
+  function tkbMainRowHTML(row, dg, keep, ros) {
+    const step = CMD.zoom, pad = TKB_PAD;
+    const yardRow = row.from === 10 || row.from === 30;
+    const upY = yardRow ? 116 : 82, dnY = upY + 26, midY = upY + 13;
+    const X = (i) => pad + (i - row.from) * step;
+    const W = Math.round(pad * 2 + 9 * step + 30);
+    const H = dnY + 82;
     let s = '';
+    /* 接続記号（前段から／次段へ） */
+    if (row.from > 0) {
+      const L = TKB_ROWS[row.from / 10 - 1].conn;
+      s += `<circle class="conn-c" cx="${pad - 26}" cy="${midY}" r="9"></circle><text class="conn" x="${pad - 26}" y="${midY + 3.5}" text-anchor="middle">${L}</text>`;
+    }
+    if (row.conn) {
+      const cx = X(row.from + 9) + step * 0.62;
+      s += `<circle class="conn-c" cx="${cx}" cy="${midY}" r="9"></circle><text class="conn" x="${cx}" y="${midY + 3.5}" text-anchor="middle">${row.conn}</text>`;
+    }
+    /* 線路（駅間ごと：複線／単線＋境界の合流・分岐） */
+    for (let i = row.from; i < row.from + 9; i++) {
+      const x0 = X(i), x1 = X(i + 1);
+      if (TKB_SINGLE.has(i)) {
+        s += `<path class="ln" d="M${x0} ${midY} H${x1}"></path>`;
+        if (!TKB_SINGLE.has(i - 1)) s += `<path class="ln" d="M${x0} ${upY} L${x0 + step * 0.38} ${midY} M${x0} ${dnY} L${x0 + step * 0.38} ${midY}"></path>`;
+        if (!TKB_SINGLE.has(i + 1)) s += `<path class="ln" d="M${x1 - step * 0.38} ${midY} L${x1} ${upY} M${x1 - step * 0.38} ${midY} L${x1} ${dnY}"></path>`;
+      } else {
+        s += `<path class="ln" d="M${x0} ${upY} H${x1}"></path><path class="ln" d="M${x0} ${dnY} H${x1}"></path>`;
+        if (TKB_XOVER.has(i)) s += `<path class="ln2" d="M${x0 + step * 0.32} ${upY} L${x0 + step * 0.68} ${dnY}"></path>`;
+      }
+    }
     /* 天神ターミナル（頭端式3線） */
-    s += `<line class="buf" x1="10" y1="${upY - 34}" x2="10" y2="${dnY + 10}"></line>`;
-    s += `<path class="ln" d="M12 ${upY - 26} H${X(0) + step * 0.5} L${X(0) + step * 1.4} ${upY}"></path>`;
-    s += `<path class="ln" d="M12 ${upY} H${W - 64}"></path>`;
-    s += `<path class="ln" d="M12 ${dnY} H${W - 64}"></path>`;
-    s += `<text class="txb" x="14" y="40">西鉄福岡(天神) T01</text>`;
-    s += `<text class="sub" x="14" y="58">頭端式 3線（1:急行 2:普通 3:特急・急行）</text>`;
-    s += `<text class="sub" x="10" y="${upY - 40}">上り線（天神方面）</text>`;
-    /* 大牟田ターミナル */
-    s += `<path class="dash" d="M${X(MAIN.length - 1) + 8} ${midY} H${W - 20}"></path>`;
-    s += `<path class="ln2" d="M${W - 64} ${upY} L${W - 14} ${midY} M${W - 64} ${dnY} L${W - 14} ${midY}"></path>`;
-    s += `<line class="buf" x1="${W - 12}" y1="${upY - 12}" x2="${W - 12}" y2="${dnY + 12}"></line>`;
-    s += `<text class="txb" x="${W - 14}" y="40" text-anchor="end">大牟田 T50</text>`;
-    s += `<text class="sub" x="${W - 14}" y="58" text-anchor="end">終端・引上げ線</text>`;
-    s += `<text class="sub" x="${W - 10}" y="${dnY + 32}" text-anchor="end">下り線（大牟田方面）</text>`;
-    /* 渡り線（春日原・久留米・柳川） */
-    for (const nm of ['春日原', '西鉄久留米', '西鉄柳川']) {
-      const cx = X(MAIN.indexOf(nm));
-      s += `<path class="ln2" d="M${cx - 13} ${upY} L${cx + 13} ${dnY} M${cx + 13} ${upY} L${cx - 13} ${dnY}"></path>`;
+    if (row.from === 0) {
+      const bx = X(0) - 24;
+      s += `<line class="buf" x1="${bx}" y1="${upY - 20}" x2="${bx}" y2="${dnY + 20}"></line>`;
+      s += `<path class="ln" d="M${bx} ${upY - 18} H${X(0) + step * 0.3} L${X(0) + step * 0.8} ${upY}"></path>`;
+      s += `<path class="ln" d="M${bx} ${midY} H${X(0) + step * 0.5} L${X(0) + step * 0.85} ${upY} M${X(0) + step * 0.5} ${midY} L${X(0) + step * 0.85} ${dnY}"></path>`;
+      s += `<path class="ln" d="M${bx} ${dnY + 18} H${X(0) + step * 0.3} L${X(0) + step * 0.8} ${dnY}"></path>`;
+      s += `<text class="sub" x="${bx + 2}" y="${upY - 30}">頭端式 3線</text>`;
     }
-    /* 二日市：上下の余分線（詳細は駅詳細図） */
-    s += `<path class="ln" d="M${X(iF) - step * 0.8} ${upY - 26} H${X(iF) + step * 0.8}"></path>`;
-    s += `<path class="ln2" d="M${X(iF) - step * 0.8} ${upY - 26} L${X(iF) - step * 0.35} ${upY} M${X(iF) + step * 0.8} ${upY - 26} L${X(iF) + step * 0.35} ${upY}"></path>`;
-    s += `<path class="ln" d="M${X(iF) - step * 0.8} ${dnY + 22} H${X(iF) + step * 0.8}"></path>`;
-    s += `<path class="ln2" d="M${X(iF) - step * 0.8} ${dnY + 22} L${X(iF) - step * 0.35} ${dnY} M${X(iF) + step * 0.8} ${dnY + 22} L${X(iF) + step * 0.35} ${dnY}"></path>`;
-    /* 太宰府線・甘木線 */
-    s += `<path class="dzl" d="M${dzP0[0]} ${dzP0[1]} Q${dzC[0]} ${dzC[1]} ${dzP1[0]} ${dzP1[1]}"></path>`;
-    s += `<circle class="stn dz-stn" cx="${gjX.toFixed(1)}" cy="${gjY.toFixed(1)}" r="3.5"></circle>`;
-    s += `<circle class="stn dz-stn" cx="${dzP1[0]}" cy="${dzP1[1]}" r="4"></circle>`;
-    s += `<text class="dz-t sub" x="${(gjX - 8).toFixed(1)}" y="${(gjY - 8).toFixed(1)}" text-anchor="end">西鉄五条 D01</text>`;
-    s += `<text class="dz-t txb" x="${dzP1[0] + 9}" y="${dzP1[1] + 4}">太宰府 D02</text>`;
-    s += `<text class="dz-t sub" x="${X(iF) + step * 0.9}" y="34">太宰府線（単線）</text>`;
-    s += `<path class="agl" d="M${agP0[0]} ${agP0[1]} Q${agC[0]} ${agC[1]} ${agP1[0]} ${agP1[1]}"></path>`;
-    for (let k = 1; k < 11; k++) {
-      const [ax, ay] = qPt(agP0, agC, agP1, k / 11);
-      s += `<circle class="stn ag-stn" cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="2.2"></circle>`;
+    /* 大牟田ターミナル（シザーズ＋頭端式3線） */
+    if (row.from === 40) {
+      const x = X(49), bx = x + step * 0.62;
+      s += `<path class="ln2" d="M${x - step * 0.72} ${upY} L${x - step * 0.34} ${dnY} M${x - step * 0.72} ${dnY} L${x - step * 0.34} ${upY}"></path>`;
+      s += `<path class="ln" d="M${x} ${upY} H${bx} M${x - step * 0.53} ${midY} H${bx} M${x} ${dnY} H${bx}"></path>`;
+      s += `<line class="buf" x1="${bx}" y1="${upY - 14}" x2="${bx}" y2="${dnY + 14}"></line>`;
+      s += `<text class="sub" x="${bx}" y="${dnY + 36}" text-anchor="end">頭端式 3線</text>`;
     }
-    s += `<circle class="stn ag-stn" cx="${agP1[0]}" cy="${agP1[1]}" r="4"></circle>`;
-    s += `<text class="ag-t txb" x="${agP1[0] + 9}" y="${agP1[1] + 4}">甘木 A01</text>`;
-    s += `<text class="ag-t sub" x="${X(iM) + step * 1.05}" y="228">甘木線（単線・交換駅あり）</text>`;
-    /* 車両基地 */
-    for (const [nm, label] of [['筑紫', '筑紫車両基地'], ['西鉄柳川', '柳川車両基地']]) {
-      const cx = X(MAIN.indexOf(nm));
-      s += `<path class="sdl" d="M${cx} ${dnY} L${cx + 18} 234"></path>`;
-      s += `<rect class="depot" x="${cx - 54}" y="234" width="124" height="20" rx="4"></rect>`;
-      s += `<text class="dep-t" x="${cx + 8}" y="248" text-anchor="middle">${label}</text>`;
+    /* 駅ごとの配線要素・ドット・コード・駅名 */
+    for (let i = row.from; i <= row.from + 9; i++) {
+      const f = TKB_FEAT[i] || {};
+      const x = X(i);
+      if (f.siding) {
+        s += `<path class="ln2" d="M${x - step * 0.42} ${upY} L${x - step * 0.18} ${upY - 16} H${x + step * 0.18} L${x + step * 0.42} ${upY}"></path>`;
+        s += `<path class="ln2" d="M${x - step * 0.42} ${dnY} L${x - step * 0.18} ${dnY + 16} H${x + step * 0.18} L${x + step * 0.42} ${dnY}"></path>`;
+        if (f.scissors) s += `<path class="ln2" d="M${x - step * 0.66} ${upY} L${x - step * 0.44} ${dnY} M${x - step * 0.66} ${dnY} L${x - step * 0.44} ${upY} M${x + step * 0.44} ${upY} L${x + step * 0.66} ${dnY} M${x + step * 0.44} ${dnY} L${x + step * 0.66} ${upY}"></path>`;
+      }
+      if (f.pass) s += `<path class="ln2" d="M${x - step * 0.42} ${midY} L${x - step * 0.18} ${midY - 16} H${x + step * 0.18} L${x + step * 0.42} ${midY}"></path>`;
+      if (f.passBoth) {
+        s += `<path class="ln2" d="M${x - step * 0.42} ${midY} L${x - step * 0.18} ${midY - 16} H${x + step * 0.18} L${x + step * 0.42} ${midY}"></path>`;
+        s += `<path class="ln2" d="M${x - step * 0.42} ${midY} L${x - step * 0.18} ${midY + 16} H${x + step * 0.18} L${x + step * 0.42} ${midY}"></path>`;
+        s += `<path class="ln2" d="M${x + step * 0.5} ${midY - 16} L${x + step * 0.78} ${midY + 16} M${x + step * 0.5} ${midY + 16} L${x + step * 0.78} ${midY - 16}"></path>`;
+      }
+      if (f.stub) s += `<path class="ln2" d="M${x - step * 0.3} ${midY} L${x - step * 0.08} ${midY - 14} H${x + step * 0.3}"></path><line class="buf" x1="${x + step * 0.3}" y1="${midY - 18}" x2="${x + step * 0.3}" y2="${midY - 10}"></line>`;
+      if (f.junction === 'dz') {
+        s += `<path class="ln2" d="M${x - step * 0.68} ${upY} L${x - step * 0.42} ${dnY} M${x - step * 0.68} ${dnY} L${x - step * 0.42} ${upY} M${x + step * 0.42} ${upY} L${x + step * 0.68} ${dnY} M${x + step * 0.42} ${dnY} L${x + step * 0.68} ${upY}"></path>`;
+        s += `<path class="sdl" d="M${x - step * 1.35} ${upY - 26} H${x - step * 0.3} M${x - step * 1.35} ${upY - 15} H${x - step * 0.3} M${x - step * 0.3} ${upY - 26} L${x - step * 0.05} ${upY} M${x - step * 0.3} ${upY - 15} L${x - step * 0.12} ${upY}"></path>`;
+        s += `<path class="ln2" d="M${x - step * 0.75} ${dnY + 16} H${x + step * 0.75} M${x - step * 0.75} ${dnY + 16} L${x - step * 0.4} ${dnY} M${x + step * 0.75} ${dnY + 16} L${x + step * 0.4} ${dnY}"></path>`;
+        s += `<path class="dzl" d="M${x} ${upY} C ${x + step * 0.2} ${upY - 22}, ${x + step * 0.55} ${upY - 30}, ${x + step * 0.95} ${upY - 34}"></path>`;
+        s += `<text class="dz-t sub" x="${x + step * 0.35}" y="${upY - 38}">太宰府線 ↗</text>`;
+      }
+      if (f.junction === 'ag') {
+        s += `<path class="agl" d="M${x} ${upY} C ${x + step * 0.2} ${upY - 20}, ${x + step * 0.55} ${upY - 27}, ${x + step * 0.95} ${upY - 30}"></path>`;
+        s += `<text class="ag-t sub" x="${x + step * 0.35}" y="${upY - 34}">甘木線 ↗</text>`;
+      }
+      if (f.yard === 'chikushi') {
+        const yb = 56;
+        let fan = '';
+        for (let k = 0; k < 7; k++) { const fx = x - step * 0.35 + k * step * 0.24; fan += `M${fx.toFixed(1)} ${yb} V30 M${(fx - 3).toFixed(1)} 30 H${(fx + 3).toFixed(1)} `; }
+        let diag = '';
+        for (let k = 0; k < 3; k++) diag += `M${(x + step * (0.95 + k * 0.28)).toFixed(1)} ${yb} L${(x + step * (1.35 + k * 0.28)).toFixed(1)} 34 `;
+        s += `<path class="yard" d="M${x - step * 0.5} ${upY} C ${x - step * 0.42} ${upY - 30}, ${x - step * 0.4} ${yb + 14}, ${x - step * 0.38} ${yb} M${x + step * 0.02} ${upY} C ${x + step * 0.1} ${upY - 28}, ${x + step * 0.35} ${yb + 12}, ${x + step * 0.6} ${yb}"></path>`;
+        s += `<path class="yard" d="M${x - step * 0.45} ${yb} H${x + step * 1.85} ${fan}${diag}"></path>`;
+        s += `<text class="dep-t" x="${x + step * 0.6}" y="18" text-anchor="middle">筑紫車両基地</text>`;
+      }
+      if (f.yard === 'yanagawa') {
+        let fan = '';
+        for (let k = 0; k < 6; k++) { const fx = x + step * (0.85 + k * 0.15); fan += `M${fx.toFixed(1)} ${(62 - k * 5).toFixed(1)} L${(fx + step * 0.3).toFixed(1)} ${(34 - k * 5).toFixed(1)} M${(fx + step * 0.3 - 3).toFixed(1)} ${(34 - k * 5).toFixed(1)} H${(fx + step * 0.3 + 3).toFixed(1)} `; }
+        s += `<path class="yard" d="M${x + step * 0.42} ${midY} C ${x + step * 0.6} ${midY - 24}, ${x + step * 0.66} 74, ${x + step * 0.8} 60"></path>`;
+        s += `<path class="yard" d="${fan}"></path>`;
+        s += `<text class="dep-t" x="${x + step * 1.05}" y="18" text-anchor="middle">柳川車両基地</text>`;
+      }
+      const major = CMD_MAJOR.indexOf(MAIN[i]) >= 0;
+      s += `<g><title>${esc(MAIN[i])}（${tCode(i)}）</title><circle class="stn${major ? ' major' : ''}" cx="${x}" cy="${midY}" r="${major ? 4 : 3}"></circle></g>`;
+      s += `<text class="code" x="${x}" y="${dnY + 62}" text-anchor="middle">${tCode(i)}</text>`;
+      s += `<text class="nm${major ? ' major' : ''}" x="${x}" y="${dnY + 75}" text-anchor="middle">${esc(cmdName(MAIN[i]))}</text>`;
     }
-    /* 駅ドット・コード・主要駅名 */
-    MAIN.forEach((n, i) => {
-      const major = CMD_MAJOR.indexOf(n) >= 0;
-      s += `<g><title>${esc(n)}（${tCode(i)}）</title><circle class="stn${major ? ' major' : ''}" cx="${X(i)}" cy="${midY}" r="${major ? 4 : 3}"></circle></g>`;
-      s += `<text class="code" x="${X(i)}" y="${dnY + 15}" text-anchor="middle">${tCode(i)}</text>`;
-      if (major && n !== '福岡(天神)' && n !== '大牟田')
-        s += `<text class="mj" x="${X(i)}" y="212" text-anchor="middle">${esc(cmdName(n))}</text>`;
-    });
-
-    /* ---- 列車チップ（線路の上） ---- */
-    const up = [], dn = [];
+    /* ---- 列車チップ ---- */
+    const up = [], dn = [], yardChips = [];
+    const inRow = (idx) => idx >= row.from && idx <= row.from + 9;
     dg.live.forEach((t) => {
-      const it = {
-        no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars,
-        kind: 'live', x: X(t.idx) + ((t.frac == null ? 0.4 : t.frac) - 0.5) * step * 0.8,
-        dim: !keep(t.no, t.delay, 'live'),
-      };
+      if (!inRow(t.idx)) return;
+      const it = { no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, kind: 'live', x: X(t.idx) + ((t.frac == null ? 0.4 : t.frac) - 0.5) * step * 0.8, dim: !keep(t.no, t.delay, 'live') };
       (t.dir === 'up' ? up : dn).push(it);
     });
     dg.ghosts.forEach((g) => {
       const idx = MAIN.indexOf(g.at);
-      if (idx < 0) return;
-      const it = {
-        no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost',
-        where: `${g.at} 付近（在線情報になし・推定）`,
-        x: X(idx) + (0.45 - 0.5) * step * 0.8, dim: !keep(g.no, 0, 'ghost'),
-      };
+      if (idx < 0 || !inRow(idx)) return;
+      const it = { no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（在線情報になし・推定）`, x: X(idx) - step * 0.04, dim: !keep(g.no, 0, 'ghost') };
       (g.dir === 'up' ? up : dn).push(it);
     });
-    /* 回送（乗務データから推定）：基地が端点で、発着の前後は引込線の位置に出す */
-    const depotPt = { '筑紫': [X(iC) + 8, 244], '西鉄柳川': [X(MAIN.indexOf('西鉄柳川')) + 8, 244] };
-    const deadDepot = [];
     (dg.deads || []).forEach((t) => {
-      const it = {
-        no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead',
-        where: t.where, x: pad + t.pos * step, dim: !keep(t.no, 0, 'dead'),
-      };
-      const pt = (t.fromDepot && t.frac <= 0.15 && depotPt[t.from]) ? depotPt[t.from]
-        : (t.toDepot && t.frac >= 0.85 && depotPt[t.to]) ? depotPt[t.to] : null;
-      if (pt) { it.pt = pt; deadDepot.push(it); }
-      else (t.dir === 'up' ? up : dn).push(it);
+      if (Math.min(4, Math.floor(t.pos / 10)) !== row.from / 10) return;
+      const it = { no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, x: pad + (t.pos - row.from) * step, dim: !keep(t.no, 0, 'dead') };
+      const yIdx = (t.fromDepot && t.frac <= 0.15) ? MAIN.indexOf(t.from) : (t.toDepot && t.frac >= 0.85) ? MAIN.indexOf(t.to) : -1;
+      if (yIdx === 16 || yIdx === 38) { it.yardX = X(yIdx) + step * 0.55; yardChips.push(it); return; }
+      (t.dir === 'up' ? up : dn).push(it);
     });
-    tkbStack(up); tkbStack(dn);
+    tkbPlace(up, W, [0, -1, -2, -3, -4]);
+    tkbPlace(dn, W, [0, 1, 2, 3, 4]);
     let chips = up.map((it) => tkbChip(it, it.x, upY + it.level * 12)).join('')
       + dn.map((it) => tkbChip(it, it.x, dnY + it.level * 12)).join('');
-    chips += deadDepot.map((it) => tkbChip(it, it.pt[0], it.pt[1])).join('');
-    /* 支線の列車（時刻表から推定・cmdBranchTrains） */
-    const brt = cmdBranchTrains(dg.dt);
-    const brDim = (no) => (filt === 'all' ? false : filt === 'roster' ? !ros.has(no) : true);
-    brt.dz.forEach((t) => {
-      const [bx, by] = qPt(dzP0, dzC, dzP1, Math.max(0, Math.min(1, t.pos / 2)));
-      chips += tkbChip({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: '太宰府線内（推定）', dim: brDim(t.no) }, bx, by - 15);
-    });
-    brt.ag.forEach((t) => {
-      const [bx, by] = qPt(agP0, agC, agP1, Math.max(0, Math.min(1, t.pos / 11)));
-      chips += tkbChip({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: '甘木線内（推定）', dim: brDim(t.no) }, bx, by - 15);
-    });
+    yardChips.forEach((it) => { chips += tkbChip(it, it.yardX, 40); it.yardX += tkbChipW(tkbLabel(it)) + 8; });
+    return `<div class="cmdb tkb tkb-row" data-row="${row.from}">
+      <svg class="tkb-svg tkb-board-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="配線略図 ${tCode(row.from)}〜${tCode(row.from + 9)}">${s}${chips}</svg>
+    </div>`;
+  }
 
+  function tkbBranchRowHTML(b, dg, keep, ros) {
+    const stepB = b.id === 'dz' ? CMD.zoom * 2.2 : CMD.zoom;
+    const pad = TKB_PAD, midY = 78, upB = midY - 13, dnB = midY + 13;
+    const n = b.order.length;
+    const X = (k) => pad + k * stepB;
+    const W = Math.round(pad * 2 + (n - 1) * stepB + 30);
+    const H = 153;
+    const lineCls = b.id === 'dz' ? 'dzl' : 'agl';
+    let s = '';
+    s += `<path class="ln" d="M8 ${upB} H${X(0) - 8} L${X(0)} ${midY} M8 ${dnB} H${X(0) - 8} L${X(0)} ${midY}"></path>`;
+    s += `<path class="${lineCls}" d="M${X(0)} ${midY} H${X(n - 1)}"></path>`;
+    const loops = b.id === 'dz' ? [1] : [4, 6, 8];
+    loops.forEach((k) => {
+      s += `<path class="${lineCls}" d="M${X(k) - stepB * 0.42} ${midY} L${X(k) - stepB * 0.18} ${midY - 13} H${X(k) + stepB * 0.18} L${X(k) + stepB * 0.42} ${midY}"></path>`;
+    });
+    const bx = X(n - 1) + stepB * 0.42;
+    s += `<path class="${lineCls}" d="M${X(n - 1) - stepB * 0.42} ${midY} L${X(n - 1) - stepB * 0.2} ${midY - 9} H${bx} M${X(n - 1) - stepB * 0.42} ${midY} L${X(n - 1) - stepB * 0.2} ${midY + 9} H${bx}"></path>`;
+    s += `<line class="buf" x1="${bx}" y1="${midY - 13}" x2="${bx}" y2="${midY + 13}"></line>`;
+    s += `<text class="${b.id === 'dz' ? 'dz-t' : 'ag-t'} txb" x="8" y="18">${b.name}（単線）</text>`;
+    b.order.forEach((nm, k) => {
+      const major = k === 0 || k === n - 1;
+      s += `<g><title>${esc(nm)}（${b.code[nm] || ''}）</title><circle class="stn ${b.id === 'dz' ? 'dz-stn' : 'ag-stn'}${major ? ' major' : ''}" cx="${X(k)}" cy="${midY}" r="${major ? 4 : 3}"></circle></g>`;
+      s += `<text class="code" x="${X(k)}" y="${midY + 55}" text-anchor="middle">${b.code[nm] || ''}</text>`;
+      s += `<text class="nm${major ? ' major' : ''}" x="${X(k)}" y="${midY + 68}" text-anchor="middle">${esc(cmdName(nm))}</text>`;
+    });
+    const brt = cmdBranchTrains(dg.dt)[b.id] || [];
+    const up = [], dn = [];
+    brt.forEach((t) => {
+      const it = { no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: `${b.name}内（推定）`, x: pad + t.pos * stepB, dim: CMD.filter === 'all' ? false : CMD.filter === 'roster' ? !ros.has(t.no) : true };
+      (b.order.indexOf(t.dest) === 0 ? up : dn).push(it);
+    });
+    (dg.onBranch || []).forEach((g) => {
+      const k = b.order.indexOf(g.at);
+      if (k < 0) return;
+      const it = { no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（支線内・推定）`, x: X(k), dim: !keep(g.no, 0, 'ghost') };
+      (b.order.indexOf(g.dest) > 0 ? dn : up).push(it);
+    });
+    tkbPlace(up, W, [0, -1, -2]);
+    tkbPlace(dn, W, [0, 1, 2]);
+    const chips = up.map((it) => tkbChip(it, it.x, upB + it.level * 12)).join('')
+      + dn.map((it) => tkbChip(it, it.x, dnB + it.level * 12)).join('');
+    return `<div class="cmdb tkb tkb-row" data-row="br-${b.id}">
+      <svg class="tkb-svg tkb-board-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${b.name}配線略図">${s}${chips}</svg>
+    </div>`;
+  }
+
+  function cmdBoardHTML(dg) {
+    const ros = rosterNos().set;
+    const keep = tkbKeep(ros, CMD.filter);
+    const rows = TKB_ROWS.map((r) => tkbMainRowHTML(r, dg, keep, ros)).join('')
+      + CMD_BRANCH.map((b) => tkbBranchRowHTML(b, dg, keep, ros)).join('');
     const jumps = CMD_MAJOR.map((n) => `<button class="cjb" data-cmd-jump="${MAIN.indexOf(n)}">${esc(cmdName(n))}</button>`).join('');
     return `<div class="cmd-bhead">
-        <b>天神大牟田線・配線図</b><span class="cmd-note">${MAIN.length}駅＋太宰府線・甘木線／公式の在線位置＋回送は乗務データから推定</span>
+        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">実配線略図に沿った段組み表示／在線は駅ブロック単位・番線は特定しない</span>
         <span class="cmd-zoom"><button data-cmd-zoom="-"${CMD.zoom <= CMD_ZOOM_STEPS[0] ? ' disabled' : ''}>−</button><button data-cmd-zoom="+"${CMD.zoom >= CMD_ZOOM_STEPS[CMD_ZOOM_STEPS.length - 1] ? ' disabled' : ''}>＋</button></span>
       </div>
       <div class="cmd-jump">${jumps}</div>
-      <div class="cmdb tkb">
-        <svg class="tkb-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="西鉄全線配線略図ボード">${s}${chips}</svg>
-      </div>`;
+      ${rows}`;
   }
 
   /* 駅詳細：西鉄二日市（4面5線・のりば1〜7）
      番線割当（推定）：太宰府直通の下り＝2番線（4番のりば・下り副本線）／太宰府からの上り直通＝1番線
+     太宰府線シャトル（二日市発着）は1番線（1番のりば）【2026-11-18 本人確認】
      下り 特急・急行＝3番線（主本線）・普通＝2番線（副本線）／上り 特急・急行＝4番線（主本線）・普通＝5番線（副本線） */
   function cmdFutsukaichiHTML(dg) {
     const stn = '西鉄二日市';
@@ -1290,8 +1358,12 @@
       const rec = trainRec(dg.dt, it.no);
       const from = rec ? canon(rec.from) : '';
       const tc = typeClass(it.type);
-      if (it.dir === 'down' && (it.dest === '太宰府' || it.dest === '西鉄五条')) return 2;
-      if (it.dir === 'up' && (from === '太宰府' || from === '西鉄五条')) return 1;
+      const dzStn = (n) => n === '太宰府' || n === '西鉄五条';
+      if (dzStn(it.dest) || dzStn(from)) {
+        /* 太宰府線：二日市発着のシャトルは1番線（1番のりば）／直通は下り2番線・上り1番線 */
+        if (it.dir === 'up') return 1;
+        return from === '西鉄二日市' ? 1 : 2;
+      }
       if (it.dir === 'down') return (tc === 'ltd' || tc === 'exp') ? 3 : 2;
       return (tc === 'ltd' || tc === 'exp') ? 4 : 5;
     };
@@ -1337,7 +1409,7 @@
         <text class="dep-t" x="290" y="88" text-anchor="end">2・3番のりば</text>
         <text class="dep-t" x="290" y="130" text-anchor="end">4・5番のりば</text>
         <text class="dep-t" x="290" y="214" text-anchor="end">6・7番のりば</text>
-        <text class="tx" x="465" y="272" text-anchor="middle">1番線：太宰府線 発着／太宰府からの上り直通</text>
+        <text class="tx" x="465" y="272" text-anchor="middle">1番線：太宰府線 発着（シャトルは1番のりば）／太宰府からの上り直通</text>
         <text class="tx" x="465" y="290" text-anchor="middle">2番線：上り（3番）／下り副本線・太宰府直通（4番）</text>
         <text class="tx" x="465" y="308" text-anchor="middle">3番線：下り本線（5番）　4番線：上り本線（6番）　5番線：上り副本線（7番）</text>
         <text class="sub" x="465" y="330" text-anchor="middle">2・3番のりばは通常不使用（多客期の対面乗り換え用／3番は平日朝1本のみ設定）</text>
@@ -1348,58 +1420,56 @@
     </details>`;
   }
 
-  /* 駅詳細：西鉄福岡(天神)（頭端式3線）
-     番線割当（推定・基本形）：1番線＝急行／2番線＝普通／3番線＝特急 */
-  function cmdTenjinHTML(dg) {
-    const stn = '福岡(天神)';
-    const ros = rosterNos().set;
-    const keep = tkbKeep(ros, CMD.filter);
-    const list = [];
-    dg.live.forEach((t) => { if (t.idx === 0) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim: !keep(t.no, t.delay, 'live') }); });
-    dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim: !keep(g.no, 0, 'ghost') }); });
-    (dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim: !keep(t.no, 0, 'dead') }); });
-    const trackOf = (it) => { const tc = typeClass(it.type); if (tc === 'ltd') return 3; if (tc === 'exp') return 1; return 2; };
-    const trackY = { 1: 64, 2: 114, 3: 164 };
-    const byTrack = { 1: [], 2: [], 3: [] };
-    list.forEach((it) => byTrack[trackOf(it)].push(it));
-    const chips = Object.keys(byTrack).map((k) => tkbRow(byTrack[k], 370, trackY[k])).join('');
-    return `<details class="cmd-track" open>
-      <summary>駅詳細：西鉄福岡(天神)<span>頭端式 3線／番線は種別からの推定</span></summary>
-      <div class="cmdb tkb-detail">
-      <svg class="tkb-svg" width="980" height="250" viewBox="0 0 980 250" role="img" aria-label="西鉄福岡天神駅配線図">
-        <text class="sub" x="950" y="26" text-anchor="end">薬院・大牟田方面 ▶</text>
-        <line class="buf" x1="70" y1="52" x2="70" y2="176"></line>
-        <line class="ln" x1="70" y1="64" x2="760" y2="64"></line>
-        <line class="ln" x1="70" y1="114" x2="760" y2="114"></line>
-        <line class="ln" x1="70" y1="164" x2="760" y2="164"></line>
-        <path class="ln2" d="M760 64 L830 114 M760 114 L830 114 M760 164 L830 114 M800 64 L845 114 M845 64 L800 114"></path>
-        <line class="ln" x1="830" y1="96" x2="965" y2="96"></line>
-        <line class="ln" x1="830" y1="132" x2="965" y2="132"></line>
-        <text class="sub" x="880" y="86">上り本線</text>
-        <text class="sub" x="880" y="152">下り本線</text>
-        <rect class="plat" x="110" y="42" width="480" height="12" rx="3"></rect>
-        <rect class="plat" x="110" y="78" width="480" height="15" rx="3"></rect>
-        <rect class="plat" x="110" y="128" width="480" height="15" rx="3"></rect>
-        <rect class="plat" x="110" y="178" width="480" height="12" rx="3"></rect>
-        <text class="dep-t" x="600" y="52">降車ホーム</text>
-        <text class="dep-t" x="600" y="89">1番のりば（乗車）</text>
-        <text class="dep-t" x="600" y="139">2番のりば（乗車）／降車ホーム</text>
-        <text class="dep-t" x="600" y="188">3番のりば（乗車）</text>
-        <text class="txb" x="200" y="58">1番線 ＝ 急行</text>
-        <text class="txb" x="200" y="108">2番線 ＝ 普通</text>
-        <text class="txb" x="200" y="158">3番線 ＝ 特急・急行</text>
-        <text class="sub" x="465" y="228" text-anchor="middle">※ 番線の種別割り当ては基本形です（2番線発着の急行・3番線発着の普通など例外あり）</text>
-        ${chips}
-      </svg>
-      </div>
-    </details>`;
-  }
+/* 駅詳細：西鉄福岡(天神)（頭端式3線）
+行き先・種別ごとの専用ホームはないため、番線の固定割当は描かず、
+列車は発車（下り）／到着（上り）のレベルでだけ示す */
+function cmdTenjinHTML(dg) {
+const stn = '福岡(天神)';
+const ros = rosterNos().set;
+const keep = tkbKeep(ros, CMD.filter);
+const list = [];
+dg.live.forEach((t) => { if (t.idx === 0) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim:!keep(t.no, t.delay, 'live')});});
+dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim:!keep(g.no, 0, 'ghost')});});
+(dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim:!keep(t.no, 0, 'dead')});});
+const dep = list.filter((it) => it.dir === 'down');
+const arr = list.filter((it) => it.dir!== 'down');
+const chips = tkbRow(dep, 490, 204) + tkbRow(arr, 490, 232);
+return `<details class="cmd-track" open>
+<summary>駅詳細：西鉄福岡(天神)<span>頭端式 3線／専用ホームなし・番線は特定しない</span></summary>
+<div class="cmdb tkb-detail">
+<svg class="tkb-svg" width="980" height="266" viewBox="0 0 980 266" role="img" aria-label="西鉄福岡天神駅配線図">
+<text class="sub" x="950" y="26" text-anchor="end">薬院・大牟田方面 ▶</text>
+<line class="buf" x1="70" y1="52" x2="70" y2="176"></line>
+<line class="ln" x1="70" y1="64" x2="760" y2="64"></line>
+<line class="ln" x1="70" y1="114" x2="760" y2="114"></line>
+<line class="ln" x1="70" y1="164" x2="760" y2="164"></line>
+<path class="ln2" d="M760 64 L830 114 M760 114 L830 114 M760 164 L830 114 M800 64 L845 114 M845 64 L800 114"></path>
+<line class="ln" x1="830" y1="96" x2="965" y2="96"></line>
+<line class="ln" x1="830" y1="132" x2="965" y2="132"></line>
+<text class="sub" x="880" y="86">上り本線</text>
+<text class="sub" x="880" y="152">下り本線</text>
+<rect class="plat" x="110" y="42" width="480" height="12" rx="3"></rect>
+<rect class="plat" x="110" y="78" width="480" height="15" rx="3"></rect>
+<rect class="plat" x="110" y="128" width="480" height="15" rx="3"></rect>
+<rect class="plat" x="110" y="178" width="480" height="12" rx="3"></rect>
+<text class="dep-t" x="600" y="52">降車ホーム</text>
+<text class="dep-t" x="600" y="89">1番のりば（乗車）</text>
+<text class="dep-t" x="600" y="139">2番のりば（乗車）／降車ホーム</text>
+<text class="dep-t" x="600" y="188">3番のりば（乗車）</text>
+<text class="sub" x="30" y="208">発車（下り）</text>
+<text class="sub" x="30" y="236">到着（上り）</text>
+<text class="sub" x="465" y="258" text-anchor="middle">※ 西鉄福岡（天神）に行き先・種別ごとの専用ホームはありません。番線はその都度変わるため、この図では番線を特定せず発着レベルで表示しています</text>
+${chips}
+</svg>
+</div>
+</details>`;
+}
 
   function cmdTrackDetailsHTML(dg) {
     return `${cmdFutsukaichiHTML(dg)}
       ${cmdTenjinHTML(dg)}
-      <p class="cmd-foot">番線レベルの配置は推定です：在線データは駅ブロック単位のため、番線は種別・行先と番線ルール（太宰府直通は西鉄二日市4番線／追い越し時は追い越される列車が副本線・追い越す列車が主本線／天神は種別で固定）にもとづいて置いています。実際の番線は駅の案内・指令の指示でご確認ください。</p>
-      <p class="cmd-foot">配線略図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を参考に自作した略図です（縮尺・分岐器の正確な位置は実物と異なります）。</p>`;
+      <p class="cmd-foot">番線レベルの配置は推定です：在線データは駅ブロック単位のため、西鉄二日市の番線は種別・行先と番線ルール（太宰府直通は4番線＝下り副本線／太宰府線シャトルは1番のりば／追い越し時は追い越される列車が副本線・追い越す列車が主本線）にもとづいて置いています。西鉄福岡（天神）には行き先・種別ごとの専用ホームがないため、番線を特定せず発着レベルで表示しています。実際の番線は駅の案内・指令の指示でご確認ください。</p>
+      <p class="cmd-foot">配線略図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を参考に自作した略図です（縮尺・分岐器の正確な位置は実物と異なります）。駅の線数・待避線・単線区間は各駅の公開情報とも突き合わせています。</p>`;
   }
 
   function cmdBranchHTML(dt) {
@@ -1507,7 +1577,6 @@
       </div>
       ${cmdBoardHTML(dg)}
       ${cmdTrackDetailsHTML(dg)}
-      ${cmdBranchHTML(dg.dt)}
       <div class="cmd-lhead"><b>在線・運転状況</b><span>${CMD.filter === 'roster' ? esc(ros.label) : CMD.filter === 'delay' ? '遅延のみ' : CMD.filter === 'lost' ? '未在線の推定のみ' : '全列車'}</span></div>
       ${cmdListHTML(dg)}
       <details class="cmd-help">
@@ -1535,17 +1604,16 @@
   function paintCmd() {
     const live = $('#cmdLive');
     if (!live) return;
-    const box = $('.cmdb');
-    const sx = box ? box.scrollLeft : CMD.scroll;
+    const saved = $$('#cmdLive .cmdb').map((b) => b.scrollLeft);
     live.innerHTML = cmdLiveHTML();
-    bindCmdScroll(sx);
+    bindCmdScroll(saved);
     updateCmdClock();
   }
-  function bindCmdScroll(x) {
-    const box = $('.cmdb');
-    if (!box) return;
-    box.scrollLeft = x || 0;
-    box.addEventListener('scroll', () => { CMD.scroll = box.scrollLeft; }, { passive: true });
+  function bindCmdScroll(saved) {
+    $$('#cmdLive .cmdb').forEach((box, i) => {
+      box.scrollLeft = Array.isArray(saved) ? (saved[i] || 0) : (i === 0 ? (saved || 0) : 0);
+      box.addEventListener('scroll', () => { CMD.scroll = box.scrollLeft; }, { passive: true });
+    });
   }
   function updateCmdClock() {
     const el = $('#cmdCount');
@@ -1556,11 +1624,13 @@
     el.textContent = left + '秒';
   }
   function cmdScrollToIdx(idx) {
-    const box = $('.cmdb');
+    const rowFrom = Math.max(0, Math.min(40, Math.floor(idx / 10) * 10));
+    const box = document.querySelector(`.cmdb.tkb-row[data-row="${rowFrom}"]`);
     if (!box) return;
-    const x = Math.max(30, CMD.zoom * 0.55) + idx * CMD.zoom;
+    const x = TKB_PAD + (idx - rowFrom) * CMD.zoom;
     box.scrollLeft = Math.max(0, x - box.clientWidth / 2);
     CMD.scroll = box.scrollLeft;
+    if (box.scrollIntoView) { try { box.scrollIntoView({ block: 'nearest' }); } catch (e) { /* noop */ } }
   }
   /* 列車の詳細（指令室から開く） */
   function openCmdTrain(no) {
@@ -1796,7 +1866,19 @@
         cards.push(`<div class="flow-item rest">
           <div class="fi-time">${fmtT(prevT)}–${fmtT(lg.bt)}</div>
           <div class="fi-main">休憩 ${lg.bt - prevT}分</div>
-          <div class="fi-sub">予備の運転士が入出庫代行</div></div>`);
+          <div class="fi-sub">予備入出庫</div></div>`);
+      }
+      if (lg.flag === 'bundle') {
+        const bl = bundleBranch(lg, dt, null);
+        const bname = bl ? bl.name : '支線';
+        cards.push(`<div class="flow-item train loc bundle">
+          <div class="fi-time">${fmtT(lg.bt)}</div>
+          <div class="fi-main"><span class="no">${esc(bname)}シャトル ${lg.t.length}本</span></div>
+          <div class="fi-sub">${esc(lg.bn)} → ${esc(lg.an)}（各列車の時刻は未取得）</div>
+          <div class="fi-end">${fmtT(lg.at)} ${esc(SHORT[lg.an] || lg.an)}</div>
+        </div>`);
+        if (lg.at != null) prevT = lg.at;
+        return;
       }
       const r = trainRec(dt, lg.t[0]);
       const cls = typeClass(r && r.type);
@@ -1856,7 +1938,7 @@
             : t.kind === 'stn' || t.kind === 'yobi' ? stationPill(t.v, false)
               : t.kind === 'ws' ? ' '
               : `<span class="tok-mark">${esc(t.v)}</span>`).join('')}</div>
-          <p class="sys-legend"><b>チ</b>筑紫駅（交代）　<b>チ出・チ入</b>筑紫車両基地　<b>チヨ・ヨ</b>予備（入出庫代行＝休憩）　<b>ハ</b>花畑駅</p>
+          <p class="sys-legend"><b>チ</b>筑紫駅（交代）　<b>チ出・チ入</b>筑紫車両基地　<b>チヨ・ヨ</b>予備（予備入出庫＝休憩）　<b>ハ</b>花畑駅</p>
         </div>
       </details>
       ${memoKey ? `<details class="fold">
@@ -1868,7 +1950,7 @@
   function placeSpan(name, depot, yobi, hand) {
     const tags = [];
     if (depot && !/基地/.test(name)) tags.push('<em class="ptag depot">基地</em>');
-    if (yobi) tags.push('<em class="ptag yobi">予備代行</em>');
+    if (yobi) tags.push('<em class="ptag yobi">予備入出庫</em>');
     if (hand) tags.push('<em class="ptag hand">交代</em>');
     return `<span class="leg-s">${esc(name)}${tags.join('')}</span>`;
   }
@@ -1896,7 +1978,7 @@
       const mk = (arr || []).filter((m) => MARK_INFO[m] && m !== '普' && m !== '~');
       if (!mk.length) return '';
       const mkCls = (m) => (/^(出|入|入出)$/.test(m) ? 'depot' : m === '×' ? 'sw' : /^H/.test(m) ? 'h' : m === '換' ? 'ex' : '');
-      return mk.map((m) => `<li class="mark"><div class="note"><b class="mkb ${mkCls(m)}">${esc(m)}</b>${yobi && (m === '出' || m === '入' || m === '入出') ? '<span class="md">（予備の運転士が入出庫代行・本人は休憩）</span>' : markDesc(m)}</div></li>`).join('');
+      return mk.map((m) => `<li class="mark"><div class="note"><b class="mkb ${mkCls(m)}">${esc(m)}</b>${yobi && (m === '出' || m === '入' || m === '入出') ? '<span class="md">（予備入出庫・本人は休憩）</span>' : markDesc(m)}</div></li>`).join('');
     };
     legs.forEach((lg) => {
       const r = trainRec(dt, lg.t[0]);
@@ -1906,9 +1988,33 @@
       if (lg.byobi || lg.ayobi) hasYobi = true;
       if (lg.byobi) {
         const rest = (lg.bt != null && prevAt != null) ? lg.bt - prevAt : null;
-        html += `<li class="rest"><div class="note"><b>休憩</b><span class="md">予備の運転士が入出庫を代行${rest != null ? `（${fmtT(prevAt)}〜${fmtT(lg.bt)} 約${rest}分）` : ''}。本人は${esc(lg.bn)}から乗り込み</span></div></li>`;
+        html += `<li class="rest"><div class="note"><b>休憩</b><span class="md">予備入出庫${rest != null ? `（${fmtT(prevAt)}〜${fmtT(lg.bt)} 約${rest}分）` : ''}。本人は${esc(lg.bn)}から乗り込み</span></div></li>`;
       }
       html += markLine(lg.pre, lg.byobi);
+      if (lg.flag === 'bundle') {
+        const bl = bundleBranch(lg, dt, null);
+        const bname = bl ? bl.name : '支線';
+        html += `<li class="train"><div class="train-card loc bundle">
+          <div class="tc-top">
+            <span class="no">${esc(bname)}シャトル ${lg.t.length}本</span>
+            <span class="type loc">まとめ</span>
+          </div>
+          <div class="leg">
+            <div class="leg-row">
+              <span class="leg-k">乗</span><b class="leg-t">${fmtT(lg.bt)}</b>${placeSpan(lg.bn, lg.btype === 'depot', lg.byobi, lg.bhand)}
+              <span class="leg-arrow">→</span>
+              <span class="leg-k">降</span><b class="leg-t">${fmtT(lg.at)}</b>${placeSpan(lg.an, lg.atype === 'depot', lg.ayobi, lg.ahand)}
+            </div>
+          </div>
+          <div class="sub">${esc(bname)}のシャトル ${lg.t.length}本をまとめて表示しています（各列車の発着時刻は未取得）</div>
+        </div></li>`;
+        html += markLine(lg.post, lg.ayobi);
+        if (lg.ayobi) {
+          html += `<li class="rest"><div class="note"><b>予備</b><span class="md">予備入出庫。本人は${esc(lg.an)}で降車</span></div></li>`;
+        }
+        if (lg.at != null) prevAt = lg.at;
+        return;
+      }
       html += `<li class="train"><div class="train-card ${cls}${warn ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
         <div class="tc-top">
           <span class="no">${esc(lg.t.join('→'))}</span>
@@ -1928,17 +2034,18 @@
         ${trainChips(lg, dt)}
         ${esCarTag(lg.t[0], dt)}${posBadge(lg.t[0], dt)}
         ${lg.flag === 'whole' ? '<div class="sub">※ 乗務区間の途中時刻を原本から特定できず、列車の全区間を表示しています</div>' : ''}
+        ${lg.flag === 'notime' ? '<div class="sub">※ 時刻未取得（この区間の発着時刻は収録データにありません。「—」は未取得の時刻です）</div>' : ''}
       </div></li>`;
       html += markLine(lg.post, lg.ayobi);
       if (lg.ayobi) {
-        html += `<li class="rest"><div class="note"><b>予備</b><span class="md">入出庫は予備の運転士が代行。本人は${esc(lg.an)}で降車</span></div></li>`;
+        html += `<li class="rest"><div class="note"><b>予備</b><span class="md">予備入出庫。本人は${esc(lg.an)}で降車</span></div></li>`;
       }
       if (lg.at != null) prevAt = lg.at;
     });
     html += '</ul>';
     const notes = [];
     if (hasDepot) notes.push('※ 車両基地発着（チ出・チ入）の区間は、時刻は筑紫駅の発着です。基地内の乗降はその直前・直後になります。');
-    if (hasYobi) notes.push('※ 「予備代行」の入出庫は予備の運転士が行うため、本人は駅で乗降し、その分休憩できます。');
+    if (hasYobi) notes.push('※ 「予備入出庫」は予備車両の入出庫のため、本人は駅で乗降し、その分休憩できます。');
     return html + (notes.length ? `<p class="flow-note">${notes.join('<br>')}</p>` : '');
   }
 
@@ -2104,10 +2211,10 @@
         <div class="fold-body">
           <div class="legend">
             <span><i class="ltd"></i>特急</span><span><i class="exp"></i>急行</span><span><i class="loc"></i>普通</span><span><i class="dead"></i>回送</span>
-            <span><i class="rest"></i>休憩（予備代行）</span>
+            <span><i class="rest"></i>休憩（予備入出庫）</span><span><i class="bundle"></i>支線シャトル（まとめ表示）</span>
             <span class="lg-sym">○乗／降　◇入換（×）　■留置（H入）　┄出入庫</span>
           </div>
-          <p class="dg-hint">縦軸＝駅、横軸＝時刻（横にスクロール）。細い実線が各列車のスジ（全区間）、○はこの行路の乗・降、◇は入換（×）、■は留置（H入・H出）、┄は入出庫です。スジをタップすると列車の詳細（列番・時刻・車号・入換）が出ます。<br>支線は分岐駅のすぐ下の行に並べています（太宰府は二日市、甘木線は宮の陣）。</p>
+          <p class="dg-hint">縦軸＝駅、横軸＝時刻（横にスクロール）。細い実線が各列車のスジ（全区間）、○はこの行路の乗・降、◇は入換（×）、■は留置（H入・H出）、┄は入出庫です。スジをタップすると列車の詳細（列番・時刻・車号・入換）が出ます。<br>支線は分岐駅のすぐ下の行に並べています（太宰府は二日市、甘木線は宮の陣）。支線シャトルは時刻を特定できた列車から列車ごとに分割して表示しています。</p>
         </div>
       </details>`;
     $('#dayTypeSeg').addEventListener('click', (e) => {
@@ -2140,6 +2247,28 @@
     if (svg && svg.dataset.xdep) wrap.scrollLeft = Math.max(0, (+svg.dataset.xdep) - 24);
   }
 
+  /* まとめ区間（支線シャトル）の所属支線。RIDX を渡すと軸上の分岐駅・終着駅の行も返す */
+  function bundleBranch(lg, dt, RIDX) {
+    let id = null;
+    for (const t of lg.t) {
+      const sec = (trainRec(dt, t) || {}).section || '';
+      if (sec.indexOf('dazaifu') >= 0) { id = 'dz'; break; }
+      if (sec.indexOf('amagi') >= 0) { id = 'ag'; break; }
+    }
+    if (!id && (lg.b === '太' || lg.a === '太')) id = 'dz';
+    if (id === 'dz') {
+      const out = { id, name: '太宰府線' };
+      if (RIDX) { out.jRow = RIDX['西鉄二日市']; out.tRow = RIDX['太宰府']; if (out.jRow == null || out.tRow == null) return null; }
+      return out;
+    }
+    if (id === 'ag') {
+      const out = { id, name: '甘木線' };
+      if (RIDX) { out.jRow = RIDX['宮の陣']; out.tRow = RIDX['甘木']; if (out.jRow == null || out.tRow == null) return null; }
+      return out;
+    }
+    return null;
+  }
+
   /* 行路の1日を、列車ごとのスジ（全区間の各駅着発）で描く */
   function diagramSVG(d, dt) {
     const AX = dgAxis();
@@ -2159,14 +2288,18 @@
       return stationRow(name);
     };
     const lines = [];       // {no, cls, pts, li, ti, fallback}
+    const bundles = [];     // まとめ区間（flag: 'bundle' の支線シャトル）
     const marks = [];       // {kind, r, t, r2, label}
     const skipped = [];
     const labelAt = [];     // ラベルを置く列車
 
     legs.forEach((lg, li) => {
       const cls = typeClass((trainRec(dt, lg.t[0]) || {}).type);
-      let any = false;
-      lg.t.forEach((no, ti) => {
+      /* まとめ区間（支線シャトル）は列車ごとのスジ・直結フォールバックを引かず、支線内の帯で表す */
+      const isBundle = lg.flag === 'bundle';
+      if (isBundle) bundles.push({ lg, li });
+      let any = isBundle;
+      (isBundle ? [] : lg.t).forEach((no, ti) => {
         const seq = stopsOf(dt, no);
         if (!seq || seq.length < 2) return;
         const pts = [];
@@ -2230,7 +2363,7 @@
       }
     });
 
-    if (!lines.length) return { svg: '<div class="empty">この行路の列車データがありません</div>', rail: '', note: '' };
+    if (!lines.length && !bundles.length) return { svg: '<div class="empty">この行路の列車データがありません</div>', rail: '', note: '' };
 
     /* 範囲 */
     const allT = [];
@@ -2242,6 +2375,12 @@
     let t1 = Math.ceil((Math.max(...allT) + 8) / 30) * 30;
     let sMin = Math.min(...lines.map((L) => Math.min(...L.pts.map((p) => p.r))));
     let sMax = Math.max(...lines.map((L) => Math.max(...L.pts.map((p) => p.r))));
+    bundles.forEach(({ lg }) => {
+      const bi = bundleBranch(lg, dt, RIDX);
+      if (bi) { sMin = Math.min(sMin, bi.jRow); sMax = Math.max(sMax, bi.tRow); }
+      if (lg.bt != null) allT.push(lg.bt);
+      if (lg.at != null) allT.push(lg.at);
+    });
     sMin = Math.max(0, sMin - 1); sMax = Math.min(AX.rows.length - 1, sMax + 1);
     const span = Math.max(60, t1 - t0);
     const availW = Math.max(220, (window.innerWidth || 390) - 100);
@@ -2284,16 +2423,34 @@
       svg += `<text class="dg-hinttxt" x="${(X(ret) - 3).toFixed(1)}" y="${topH - 4}" text-anchor="end" fill="#d8a72f">退勤 ${esc(lastRet(d))}</text>`;
     }
 
-    /* 予備代行の休憩（筑紫の行） */
+    /* 予備入出庫の休憩（筑紫の行） */
     const tsuRow = RIDX['筑紫'];
     let prevAt = dep;
     legs.forEach((lg) => {
       if (lg.byobi && lg.bt != null && prevAt != null && lg.bt - prevAt >= 2 && tsuRow != null) {
         const y = Y(tsuRow) - rowH / 2 + 2;
-        svg += `<line class="dg-rest" x1="${X(prevAt).toFixed(1)}" y1="${y}" x2="${X(lg.bt).toFixed(1)}" y2="${y}"><title>休憩 ${fmtMin(prevAt)}〜${fmtMin(lg.bt)}（予備の運転士が入出庫を代行）</title></line>`;
+        svg += `<line class="dg-rest" x1="${X(prevAt).toFixed(1)}" y1="${y}" x2="${X(lg.bt).toFixed(1)}" y2="${y}"><title>休憩 ${fmtMin(prevAt)}〜${fmtMin(lg.bt)}（予備入出庫）</title></line>`;
         svg += `<text class="dg-resttx" x="${((X(prevAt) + X(lg.bt)) / 2).toFixed(1)}" y="${(y - 2).toFixed(1)}" text-anchor="middle">休憩</text>`;
       }
       if (lg.at != null) prevAt = lg.at;
+    });
+
+    /* まとめ区間：支線の行の内側だけに破線の帯＋往復ジグザグで表す（本線の駅の行は横切らない） */
+    bundles.forEach(({ lg }) => {
+      const bi = bundleBranch(lg, dt, RIDX);
+      if (!bi || lg.bt == null || lg.at == null) return;
+      const x0 = X(lg.bt), x1 = X(lg.at);
+      const yJ = Y(bi.jRow), yT = Y(bi.tRow);
+      const top = Math.min(yJ, yT) - rowH / 2, bot = Math.max(yJ, yT) + rowH / 2;
+      const trips = Math.max(2, Math.min(24, Math.round((lg.at - lg.bt) / 10)));
+      let zp = '';
+      for (let k = 0; k <= trips; k++) { const xx = x0 + (x1 - x0) * k / trips; zp += `${k ? 'L' : 'M'}${xx.toFixed(1)},${(k % 2 ? yT : yJ).toFixed(1)} `; }
+      const label = `${bi.name}シャトル ${lg.t.length}本（各列車の時刻は未取得）`;
+      svg += `<g class="dg-bundle ${bi.id}"><title>${esc(label)}</title>`
+        + `<rect x="${x0.toFixed(1)}" y="${top.toFixed(1)}" width="${(x1 - x0).toFixed(1)}" height="${(bot - top).toFixed(1)}"></rect>`
+        + `<path class="dg-bundle-z" d="${zp}"></path>`
+        + (x1 - x0 > 170 ? `<text x="${((x0 + x1) / 2).toFixed(1)}" y="${(((yJ + yT) / 2) + 3).toFixed(1)}" text-anchor="middle">${esc(label)}</text>` : '')
+        + `</g>`;
     });
 
     /* スジ */
@@ -2384,6 +2541,7 @@
     let note = `表示範囲：${esc(canon(firstRowName))} 〜 ${esc(canon(lastRowName))}`;
     if (skipped.length) note += `／時刻が取れなかった列車：${skipped.map(esc).join('、')}`;
     if (lines.some((L) => L.fallback)) note += '／破線＝各駅時刻が未取得のため乗務区間を直結';
+    if (bundles.length) note += '／破線の帯＝支線シャトルのまとめ表示（各列車の時刻は未取得）';
     if (esApplies(dt)) note += '／列番の下の小さい数字＝車号（えれサイト4）';
     if (STOPS.status !== 'ready') note += '／各駅の着発時刻を読み込み中（読み込み後に全区間のスジになります）';
     return { svg, rail, note };
@@ -2682,7 +2840,7 @@
           <li><span class="pill stn" style="--pc:#12897c"><b>チ出</b><i>筑紫車両基地</i></span>本人が出庫して乗り込む → <b>筑紫車両基地</b>発</li>
           <li><span class="pill stn" style="--pc:#12897c"><b>チ入</b><i>筑紫車両基地</i></span>本人が入庫する → <b>筑紫車両基地</b>着</li>
           <li><span class="pill stn" style="--pc:#22b8a6"><b>チ</b><i>筑紫駅</i></span>ふつうに乗る → <b>筑紫駅ホームでの乗務交代</b></li>
-          <li><span class="pill yobi"><b>チヨ・ヨ・ハヨ</b><i>予備</i></span><b>予備の運転士が入出庫を代行</b>するため、本人は駅で乗降してその分<b>休憩</b>できる</li>
+          <li><span class="pill yobi"><b>チヨ・ヨ・ハヨ</b><i>予備</i></span><b>予備入出庫</b>するため、本人は駅で乗降してその分<b>休憩</b>できる</li>
         </ul>
         <p class="sc-note">出勤・退勤場所も同じ基準で表示しています（出庫なら筑紫車両基地発、予備なら筑紫駅発）。</p>
       </div>
@@ -2690,14 +2848,14 @@
       <div class="sym-grid">${st.map((c) => `<div class="sym"><span class="pill stn" style="--pc:${CODE_COLOR[c.code]}"><b>${esc(c.code)}</b><i>${esc(c.name)}</i></span></div>`).join('')}</div>
       <h4 class="tl-title" style="margin-top:14px">予備（ヨ）</h4>
       <div class="sym-grid">${yb.map((c) => `<div class="sym"><span class="pill yobi"><b>${esc(c.code)}</b><i>${esc(c.name)}</i></span>${c.note ? `<span class="md">${esc(c.note)}</span>` : ''}</div>`).join('')}</div>
-      <div class="sym-list"><div><b>休憩</b>　ヨ（チヨ・ハヨ）の入出庫は予備の運転士が代行するので、本人はその間休憩できます（本人確認済み）。</div></div>
+      <div class="sym-list"><div><b>休憩</b>　ヨ（チヨ・ハヨ）は予備入出庫（予備車両の入出庫）なので、本人はその間休憩できます。</div></div>
       <h4 class="tl-title" style="margin-top:14px">動作・マーク</h4>
       <div class="sym-list">${mk.map((c) => `<div><b>${esc(c.code)}</b>　${esc(c.name)}${c.note ? ` <span class="md">（${esc(c.note)}）</span>` : ''}</div>`).join('')}</div>
       <h4 class="tl-title" style="margin-top:14px">乗務区間の表示について</h4>
       <div class="sym-list">
         <div><b>乗 / 降</b>　その列車に<b>乗り込む駅</b>と<b>降りる駅</b>。時刻は西鉄公式時刻表の実際の発着時刻です。</div>
         <div><b>基地</b>　車両基地発着（チ出・チ入）の区間。時刻は筑紫駅の発着で、基地内の乗降はその直前・直後です。</div>
-        <div><b>予備代行</b>　ヨの入出庫を予備の運転士が代行。本人は駅で乗降し、その分休憩できます。</div>
+        <div><b>予備入出庫</b>　ヨは予備車両の入出庫。本人は駅で乗降し、その分休憩できます。</div>
         <div><b>交代</b>　筑紫駅ホームでの乗務交代（車両基地ではない）。</div>
         <div><b>全区間</b>　その列車自身の始発〜終着（乗務する区間とは限りません）。</div>
         <div><b>⚠ 要確認</b>　原本（乗務系統表）の表記と公式時刻表の整合が取れていない区間。原本をご確認ください。</div>
