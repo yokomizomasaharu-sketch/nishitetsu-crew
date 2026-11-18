@@ -958,7 +958,8 @@
     const w = cmdChipW(step);
     const dl = it.delay || 0;
     const cls = [typeClass(it.type), dl > 0 ? 'late' : '', it.kind !== 'live' ? it.kind : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
-    const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${dl ? '・' + dl + '分遅れ' : '・定時'}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : ''}`;
+    const carTxt = it.cars ? ` ・ 車 ${it.cars}` : '';
+    const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${dl ? '・' + dl + '分遅れ' : '・定時'}${carTxt}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : ''}`;
     return `<button class="cchip ${cls}" style="left:${it.x.toFixed(1)}px;width:${w}px" data-cmd-train="${esc(it.no)}" title="${esc(title)}">
         <b>${esc(it.no)}</b>${dl > 0 && w >= 40 ? `<i>+${dl}</i>` : ''}${it.kind === 'ghost' ? '<u>?</u>' : ''}</button>`;
   }
@@ -1002,7 +1003,7 @@
     dg.live.forEach((t) => {
       const it = {
         no: t.no, idx: t.idx, frac: t.frac, col: t.col, delay: t.delay, type: t.type, dest: t.dest,
-        where: t.where, kind: 'live', dim: !keep(t.no, t.delay, 'live'),
+        where: t.where, cars: t.cars, kind: 'live', dim: !keep(t.no, t.delay, 'live'),
       };
       (t.dir === 'up' ? up : dn).push(it);
     });
