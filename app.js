@@ -256,8 +256,8 @@
       items += `<div class="flow-item train ${cls}${lg.flag === 'conflict' ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
         <div class="fi-time">${fmtT(lg.bt)}</div>
         <div class="fi-main"><span class="no">${esc(lg.t.join('→'))}</span><span class="type ${cls}">${esc(typeShort(r && r.type))}</span></div>
-        <div class="fi-sub">${esc(stName(lg.b))} → ${esc(stName(lg.a))}</div>
-        <div class="fi-end">${fmtT(lg.at)} ${esc(shortName(lg.a))}</div>
+        <div class="fi-sub">${esc(lg.db)} → ${esc(lg.da)}</div>
+        <div class="fi-end">${fmtT(lg.at)} ${esc(SHORT[lg.da] || lg.da)}</div>
       </div>`;
       if (i < legs.length - 1) items += '<div class="flow-sep"></div>';
     });
@@ -319,9 +319,10 @@
         </div>
         <div class="leg">
           <div class="leg-row">
-            <span class="leg-k">乗</span><b class="leg-t">${fmtT(lg.bt)}</b><span class="leg-s">${esc(stName(lg.b))}</span>
+            <span class="leg-k">乗</span><b class="leg-t">${fmtT(lg.bt)}</b><span class="leg-s">${esc(lg.db)}</span>
             <span class="leg-arrow">→</span>
-            <span class="leg-k">降</span><b class="leg-t">${fmtT(lg.at)}</b><span class="leg-s">${esc(stName(lg.a))}</span>
+            <span class="leg-k">降</span><b class="leg-t">${fmtT(lg.at)}</b><span class="leg-s">${esc(lg.da)}</span>
+            ${lg.db === lg.da ? '<span class="leg-via">（折り返し）</span>' : ''}
           </div>
         </div>
         ${r ? `<div class="sub">全区間 ${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : '<div class="sub">列車データが見つかりません</div>'}
@@ -361,7 +362,7 @@
       ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
         uses.map((u) => `<div class="res-card" data-goto="${u.p.id}:${u.d.row}">
           <div class="t"><span class="badge work">${u.p.label}</span><span class="badge off">${CIRC[u.d.dutyNo - 1]}</span>
-          <span class="run">${u.lg ? `${fmtT(u.lg.bt)} ${esc(stName(u.lg.b))} → ${fmtT(u.lg.at)} ${esc(stName(u.lg.a))}` : u.d.row + '日目'}</span></div></div>`).join('') : ''}`);
+          <span class="run">${u.lg ? `${fmtT(u.lg.bt)} ${esc(u.lg.db)} → ${fmtT(u.lg.at)} ${esc(u.lg.da)}` : u.d.row + '日目'}</span></div></div>`).join('') : ''}`);
     $$('[data-goto]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => {
       const [pid, r] = el.dataset.goto.split(':');
       closeSheet(); setTimeout(() => openDuty(pid, +r), 80);
@@ -452,12 +453,12 @@
     const segs = [];
     const toIdx = (name) => (IDX[name] != null ? IDX[name] : (name === '西鉄福岡(天神)' ? IDX['福岡(天神)'] : null));
     for (const lg of legs) {
-      const a = toIdx(stName(lg.b)), b = toIdx(stName(lg.a));
+      const a = toIdx(lg.db), b = toIdx(lg.da);
       if (a == null || b == null) { segs.push({ skip: true, no: lg.t.join('/') }); continue; }
       const r = trainRec(dt, lg.t[0]);
       segs.push({ no: lg.t.join('→'), r, a, b, t1: lg.bt, t2: lg.at,
         cls: typeClass(r && r.type), flag: lg.flag,
-        bt: lg.bt, at: lg.at, bname: stName(lg.b), aname: stName(lg.a) });
+        bt: lg.bt, at: lg.at, bname: lg.db, aname: lg.da });
     }
     const draw = segs.filter((x) => !x.skip && x.t1 != null && x.t2 != null);
     if (!draw.length) return { svg: '<div class="empty">この行路の列車データがありません</div>', rail: '' };

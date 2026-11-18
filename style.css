@@ -383,3 +383,4 @@ html[data-theme="light"] .tchip.on { color: #fff; }
 .res-summary.pin b { font-size: 15px; }
 .res-card.single { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .open-hint { margin-top: 7px; font-size: 11.5px; font-weight: 800; color: var(--accent); }
+.leg-via { font-size: 11px; color: var(--fg-3); }
