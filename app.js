@@ -457,7 +457,11 @@
   function diagramSVG(d, dt) {
     const legs = legsOf(d);
     const segs = [];
-    const toIdx = (name) => (IDX[name] != null ? IDX[name] : (name === '西鉄福岡(天神)' ? IDX['福岡(天神)'] : null));
+    const ALIAS = { '西鉄福岡(天神)': '福岡(天神)', '筑紫車両基地': '筑紫', '花畑車両基地': '花畑', '筑紫車庫': '筑紫' };
+    const toIdx = (name) => {
+      const n = ALIAS[name] || name;
+      return IDX[n] != null ? IDX[n] : null;
+    };
     for (const lg of legs) {
       const a = toIdx(lg.db), b = toIdx(lg.da);
       if (a == null || b == null) { segs.push({ skip: true, no: lg.t.join('/') }); continue; }
