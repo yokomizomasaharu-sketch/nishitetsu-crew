@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#10161d">
 <meta name="robots" content="noindex, nofollow">
-<meta name="description" content="西鉄 乗務員支援システム — 輪番・乗務系統・ダイヤグラム（2026.3.14改正）">
+<meta name="description" content="西鉄 乗務員支援システム — 運行指令室（列車在線・遅延）・輪番・乗務系統・ダイヤグラム（2026.3.14改正）">
 <title>西鉄 乗務員支援システム</title>
-<link rel="manifest" href="manifest.json?v25">
+<link rel="manifest" href="manifest.json?v26">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v25">
+<link rel="stylesheet" href="style.css?v26">
 </head>
 <body>
 <div id="app">
@@ -27,27 +27,27 @@
   <nav class="tabs" id="tabs" role="tablist">
     <button class="tab active" data-view="roster" role="tab">輪番</button>
     <button class="tab" data-view="duty" role="tab">行路</button>
-    <button class="tab" data-view="diagram" role="tab">ダイヤグラム</button>
+    <button class="tab" data-view="cmd" role="tab">指令</button>
+    <button class="tab" data-view="diagram" role="tab">ダイヤ</button>
     <button class="tab" data-view="search" role="tab">検索</button>
   </nav>
 
-  <div class="esbar" id="esBar" data-state="idle" hidden>
-    <button class="es-main" id="esBarMain" type="button" aria-label="えれサイト4の車号情報"><span class="es-dot"></span><span class="es-txt">車号：えれサイト4から取得</span></button>
-    <button class="es-refresh" id="esRefresh" type="button" aria-label="車号を再取得">↻</button>
+  <div class="statusbar" id="statusBar">
+    <button class="s-pill" id="esPill" type="button" data-state="idle" aria-label="車号（えれサイト4）"><span class="s-dot"></span><span class="s-k">車号</span><span class="s-v" id="esVal">—</span></button>
+    <button class="s-pill" id="posPill" type="button" data-state="idle" aria-label="列車の在線位置"><span class="s-dot"></span><span class="s-k">在線</span><span class="s-v" id="posVal">—</span></button>
+    <button class="s-re" id="allRefresh" type="button" aria-label="まとめて更新">↻</button>
   </div>
-
-    <div class="posbar" id="posBar" data-state="idle" hidden>
-    <button class="pos-main" id="posBarMain" type="button" aria-label="西鉄の列車在線位置"><span class="pos-dot"></span><span class="pos-txt">在線位置：タップで取得</span></button>
-    <button class="pos-refresh" id="posRefresh" type="button" aria-label="在線位置を再取得">↻</button>
-  </div>
-  <div class="alertbox" id="alertBox" role="status" hidden></div>
 
   <main id="main"></main>
 
   <footer class="foot">
-    <p>出典：車掌 輪番表／乗務系統表（2026.3.14改正・社内資料）／列車時刻は「西鉄列車編成両数表 2026/03/14改正」を参照</p>
-    <p>車号はえれサイト4（elesite-next.com）の運用情報（利用者の投稿）を取得して表示しています。未投稿・誤り・あとからの変更があります。乗務前に運用表でご確認ください。</p>
-    <p class="warn">関係者限り・リンクの無断共有／転載はご遠慮ください。</p>
+    <details class="foot-more">
+      <summary>出典・注意</summary>
+      <p>出典：車掌 輪番表／乗務系統表（2026.3.14改正・社内資料）／列車時刻は「西鉄列車編成両数表 2026/03/14改正」を参照</p>
+      <p>車号はえれサイト4（elesite-next.com）の運用情報（利用者の投稿）を取得して表示しています。未投稿・誤り・あとからの変更があります。乗務前に運用表でご確認ください。</p>
+      <p>在線位置は西鉄「列車走行位置」（busnavi-railway.nnr.co.jp）の情報を中継サービス経由で取得しています。位置は駅ブロック単位で、数十秒〜数分前の情報です。停車中／走行中・未在線は推定を含みます。</p>
+      <p class="warn">関係者限り・リンクの無断共有／転載はご遠慮ください。</p>
+    </details>
   </footer>
 </div>
 
@@ -57,7 +57,7 @@
   <div class="sheet-body" id="sheetBody"></div>
 </div>
 
-<script src="data.js?v25"></script>
-<script src="app.js?v25"></script>
+<script src="data.js?v26"></script>
+<script src="app.js?v26"></script>
 </body>
 </html>

@@ -162,6 +162,7 @@
     diaType: '',               // weekday | holiday
     counts: { unyou: 0, unyouCar: 0, retsuban: 0, retsubanCar: 0 },
     map: {},                   // 列番 -> [{ cars, pos, name, shotei, uid, shukko, nyuko }]
+    table: [],                 // 所定 -> 運用（編成と列番の並び）＝アプリ内の運用表
     error: '',
     staleFailed: false,
   };
@@ -201,7 +202,7 @@
       if (!c || !c.map || c.date !== esDate()) return;   // 別の日のキャッシュは捨てる
       ES.date = c.date; ES.fetchedAt = c.fetchedAt || 0; ES.diaName = c.diaName || '';
       ES.diaType = esDiaType(ES.diaName); ES.counts = c.counts || ES.counts;
-      ES.map = c.map; ES.status = 'ready';
+      ES.map = c.map; ES.table = Array.isArray(c.table) ? c.table : []; ES.status = 'ready';
     } catch (e) { /* 壊れたキャッシュは無視 */ }
   }
   function esSave() {
@@ -236,10 +237,21 @@
       }
       if (!tables.some(Boolean)) throw new Error('運用表が空でした');
       const map = {};
+      const table = [];
       const counts = { unyou: 0, unyouCar: 0, retsuban: 0, retsubanCar: 0 };
       for (const t of tables) {
         for (const g of (t && t.unyou_table) || []) {
+          const sec = { s: String(g.shotei || ''), rows: [] };
+          if (sec.s) table.push(sec);
           for (const u of (g.unyou_group || [])) {
+            const cars0 = String(u.display_sharyo || '').trim();
+            const seq = [];
+            for (const r0 of (u.retsuban_list || [])) {
+              const raw0 = String(r0.retsuban == null ? '' : r0.retsuban).trim();
+              if (!raw0) continue;
+              seq.push({ n: raw0, t: Number(r0.start_time || 0), ty: String(r0.shubetsu || ''), to: String(r0.ikisaki || ''), at: String(r0.start_st || '') });
+            }
+            if (seq.length) sec.rows.push({ cars: cars0, sk: String(u.shukko || ''), nk: String(u.nyuko || ''), seq });
             counts.unyou++;
             const cars = String(u.display_sharyo || '').trim();
             if (cars) counts.unyouCar++;
@@ -261,6 +273,7 @@
       counts.retsuban = Object.keys(map).length;
       counts.retsubanCar = Object.keys(map).filter((k) => map[k].some((x) => x.cars)).length;
       ES.map = map; ES.counts = counts;
+      ES.table = table.filter((x) => x.rows.length);
       ES.date = date; ES.fetchedAt = Date.now();
       ES.diaName = (pat && pat.name) || ''; ES.diaType = esDiaType(ES.diaName);
       ES.status = 'ready'; ES.error = ''; ES.staleFailed = false;
@@ -340,30 +353,24 @@
   }
 
   function esBarText() {
-    if (ES.status === 'loading') return ['load', '車号を取得中…（えれサイト4）'];
-    if (ES.status === 'error') return ['err', '車号を取得できません · タップで詳細'];
+    if (ES.status === 'loading') return ['load', '取得中…'];
+    if (ES.status === 'error') return ['err', '取得できません'];
     if (ES.status === 'ready') {
       const c = ES.counts;
       const stale = ES.staleFailed || Date.now() - ES.fetchedAt > ES.STALE;
-      const txt = ES.staleFailed
-        ? `車号 ${c.retsubanCar}/${c.retsuban}列車 · ${esClock(ES.fetchedAt)}取得（更新できません）`
-        : `車号 ${c.retsubanCar}/${c.retsuban}列車 · ${esClock(ES.fetchedAt)}取得`;
-      return [stale ? 'stale' : 'ok', txt];
+      return [stale ? 'stale' : 'ok', `${c.retsubanCar}/${c.retsuban}列車`];
     }
-    return ['idle', '車号：えれサイト4から取得（タップ）'];
+    return ['idle', 'タップで取得'];
   }
   function renderEsBar() {
-    const bar = $('#esBar');
-    if (!bar) return;
+    const pill = $('#esPill');
+    if (!pill) return;
     const [cls, txt] = esBarText();
-    bar.dataset.state = cls;
-    bar.hidden = false;
-    const main = $('#esBarMain');
-    if (main) main.innerHTML = `<span class="es-dot"></span><span class="es-txt">${esc(txt)}</span>`;
-    const rf = $('#esRefresh');
-    if (rf) { rf.disabled = ES.status === 'loading'; rf.classList.toggle('spin', ES.status === 'loading'); }
-    const tb = $('.tabs');
-    if (tb) bar.style.top = (tb.offsetTop + tb.offsetHeight) + 'px';
+    pill.dataset.state = cls;
+    const v = $('#esVal');
+    if (v) v.textContent = txt;
+    const rf = $('#allRefresh');
+    if (rf) rf.classList.toggle('spin', ES.status === 'loading' || POS.status === 'loading');
   }
   function renderKeep() {
     const y = window.scrollY;
@@ -376,6 +383,7 @@
     const c = ES.counts;
     const pending = Object.keys(ES.map).filter((k) => !ES.map[k].some((x) => x.cars)).sort();
     const rows = [
+      ['路線', '西鉄天神大牟田線・甘木線'],
       ['対象日', `${ES.date || esDate()}（${ES.diaName || '—'}）`],
       ['取得', ES.fetchedAt ? `${esClock(ES.fetchedAt)}（${Math.max(0, Math.round((Date.now() - ES.fetchedAt) / 60000))}分前）` : '—'],
       ['車号あり', `運用 ${c.unyouCar}/${c.unyou} ・ 列車 ${c.retsubanCar}/${c.retsuban}`],
@@ -386,14 +394,56 @@
       <div class="es-detail">
         ${ES.status === 'error' ? `<p class="es-err">${esc(ES.error)}</p>` : ''}
         <dl class="es-dl">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-        <div class="btn-row"><button class="btn primary" id="esReload"${ES.status === 'loading' ? ' disabled' : ''}>再取得</button>
-          <a class="btn" href="${ES.SITE}" target="_blank" rel="noopener noreferrer">運用表を開く</a></div>
-        ${pending.length ? `<h4 class="tl-title" style="margin-top:14px">車号が未投稿の列番（${pending.length}件）</h4>
-          <p class="es-pending">${pending.slice(0, 80).map(esc).join('　')}${pending.length > 80 ? `　ほか${pending.length - 80}件` : ''}</p>` : ''}
+        <div class="btn-row"><button class="btn primary" id="esTableBtn"${ES.table.length ? '' : ' disabled'}>西鉄の運用表を見る</button>
+          <button class="btn" id="esReload"${ES.status === 'loading' ? ' disabled' : ''}>再取得</button></div>
+        ${pending.length ? `<details class="es-pend-wrap"><summary>車号が未投稿の列番（${pending.length}件）</summary>
+          <p class="es-pending">${pending.slice(0, 200).map(esc).join('　')}${pending.length > 200 ? `　ほか${pending.length - 200}件` : ''}</p></details>` : ''}
         <p class="es-caution">えれサイト4の運用情報は利用者の投稿です。未投稿・誤り・あとからの変更があります。乗務前に運用表（原本）でもご確認ください。今日のダイヤ（${esc(ES.diaName || '—')}）の内容で、ほかのダイヤの日には表示しません。回送列車は列番での掲載がないため車号は出ません。</p>
+        <p class="es-caution">公式サイト（えれサイト4）は路線を指定して開くURLがなく、開くと京阪本線が既定で表示されます。公式で見るときは「路線選択 → 九州 → 私鉄 → 西鉄 → 西鉄天神大牟田線・甘木線」を選んでください（一度選ぶと、以後は西鉄が開きます）。</p>
       </div>`, () => {
       const r = $('#esReload');
       if (r) r.addEventListener('click', () => esFetch(true));
+      const t = $('#esTableBtn');
+      if (t) t.addEventListener('click', openEsTable);
+    });
+  }
+
+  /* 西鉄の運用表（えれサイト4のAPIから取得した内容をアプリ内で表示）
+     公式サイトの路線ディープリンクが無い（＝開くと京阪が既定）ため、ここで西鉄の運用をそのまま見せる */
+  const hhmm = (v) => (v ? `${Math.floor(v / 100)}:${String(v % 100).padStart(2, '0')}` : '—');
+  function esTableHTML(q) {
+    const data = ES.table || [];
+    const Q = String(q || '').toUpperCase().replace(/\s/g, '');
+    let hit = 0, groups = 0;
+    const body = data.map((sec) => {
+      const rows = sec.rows.map((r) => {
+        const cars = String(r.cars || '').replace(/\s/g, '');
+        const byNo = !Q || r.seq.some((t) => String(t.n).toUpperCase().includes(Q));
+        const byCar = !Q || (!!cars && cars.includes(Q));
+        if (!byNo && !byCar) return '';
+        hit++;
+        const chips = r.seq.map((t) => {
+          const on = Q && String(t.n).toUpperCase().includes(Q);
+          return `<span class="etr-chip${on ? ' on' : ''}"><b>${esc(hhmm(t.t))}</b><em>${esc(t.n)}</em><i>${esc(SHORT[canon(t.to)] || t.to || '')}</i></span>`;
+        }).join('');
+        return `<div class="etr-row"><div class="etr-head"><b>${esc(r.cars || '未投稿')}</b><span>${esc(r.sk)} → ${esc(r.nk)}</span></div><div class="etr-chips">${chips}</div></div>`;
+      }).filter(Boolean).join('');
+      if (!rows) return '';
+      groups++;
+      return `<details class="etr-sec"${Q || groups === 1 ? ' open' : ''}><summary>${esc(sec.s)}<span>${sec.rows.length}運用</span></summary>${rows}</details>`;
+    }).join('');
+    return hit ? body : '<p class="cmd-empty">該当する運用はありません。</p>';
+  }
+  function openEsTable() {
+    if (!ES.table.length) return;
+    showSheet(`<div class="sheet-head"><h2>西鉄の運用表</h2><button class="sheet-close" data-close>✕</button></div>
+      <div class="es-table">
+        <p class="es-table-note">えれサイト4の西鉄天神大牟田線・甘木線の運用情報（${esc(esClock(ES.fetchedAt))}取得・${esc(ES.diaName || '—')}）。投稿にもとづく内容です。</p>
+        <input id="esTableQ" class="es-q" type="search" placeholder="列番・編成で絞り込み（例 4056 / 3113）" autocomplete="off">
+        <div id="esTableBody">${esTableHTML('')}</div>
+      </div>`, () => {
+      const q = $('#esTableQ');
+      if (q) q.addEventListener('input', () => { $('#esTableBody').innerHTML = esTableHTML(q.value); });
     });
   }
 
@@ -501,6 +551,7 @@
           st, row: Number(o.locationRow), col: o.locationCol, dir: o.trainDirection,
           delay: String(o.delay || ''), delayMin: String(info.delayMinutes || ''),
           dest: info.destStationName || '', type: info.trainType || '', cars: info.carsOfTrain || '',
+          doors: info.doorsOfCar || '', destCode: info.destStationNumber || '',
           first: info.firstTrainStationNumber || '', at: Date.now(),
         };
       }
@@ -511,7 +562,8 @@
       POS.status = 'ready'; POS.error = '';
       posSave();
       renderPosBar();
-      if (state.view === 'diagram') renderKeep();
+      if (state.view === 'cmd') paintCmd();
+      else if (state.view === 'diagram') renderKeep();
       else if (! $('#sheet').hidden && $('.pos-detail')) openPosDetail();
       else {
         const ae = document.activeElement;
@@ -551,20 +603,23 @@
   function posBadge(no, dt) {
     const p = posInfo(no, dt);
     if (!p) return '';
-    if (p.state === 'on') return `<span class="pos-b on" title="西鉄 列車走行位置（${esc(posClock())}）"><i>在線</i>${esc(p.where)}付近・定時</span>`;
-    if (p.state === 'delay') return `<span class="pos-b delay" title="西鉄 列車走行位置（${esc(posClock())}）"><i>遅延</i>${esc(p.where)}付近・${p.delay}分遅れ</span>`;
-    if (p.state === 'missing') return `<span class="pos-b warn" title="在線情報にこの列番がありません（回送・基地内・運休など）"><i>⚠</i>在線なし</span>`;
+    const attrs = ` data-cmd="${esc(no)}" type="button"`;
     if (p.state === 'before') return `<span class="pos-b idle"><i>−</i>運行前</span>`;
     if (p.state === 'done') return `<span class="pos-b idle"><i>−</i>運行終了</span>`;
-    return '';
+    if (p.state === 'missing') return `<button class="pos-b warn"${attrs} title="在線情報にこの列番がありません（回送・基地内・運休など）。タップで指令室"><i>⚠</i>在線なし</button>`;
+    const info = cmdInfo(no);
+    const seg = info ? (info.at ? `${info.short} 停車中` : info.short) : `${p.where}付近`;
+    if (p.state === 'on') return `<button class="pos-b on"${attrs} title="西鉄 列車走行位置（${esc(posClock())}）。タップで指令室"><i>在線</i>${esc(seg)}・定時</button>`;
+    return `<button class="pos-b delay"${attrs} title="西鉄 列車走行位置（${esc(posClock())}）。タップで指令室"><i>遅延</i>${esc(seg)}・+${p.delay}分</button>`;
   }
   function posLine(no, dt) {
     const p = posInfo(no, dt);
     if (!p) return '';
     const when = `${posClock()} 取得・西鉄 列車走行位置`;
-    if (p.state === 'on') return `<div class="pos-line on"><b>在線</b>${esc(p.where)}付近・定時<span>${esc(when)}</span></div>`;
-    if (p.state === 'delay') return `<div class="pos-line delay"><b>遅延</b>${esc(p.where)}付近・${p.delay}分遅れ<span>${esc(when)}</span></div>`;
-    if (p.state === 'missing') return `<div class="pos-line warn"><b>⚠</b>在線情報にこの列番がありません<span>回送・基地内・運休のいずれか（${esc(when)}）</span></div>`;
+    const info = p.state === 'on' || p.state === 'delay' ? cmdInfo(no) : null;
+    if (p.state === 'on') return `<button class="pos-line on" data-cmd="${esc(no)}" type="button"><b>在線</b>${esc(info ? info.where : p.where + '付近')}・定時<span>${esc(when)}</span></button>`;
+    if (p.state === 'delay') return `<button class="pos-line delay" data-cmd="${esc(no)}" type="button"><b>遅延</b>${esc(info ? info.where : p.where + '付近')}・+${p.delay}分<span>${esc(when)}</span></button>`;
+    if (p.state === 'missing') return `<button class="pos-line warn" data-cmd="${esc(no)}" type="button"><b>⚠</b>在線情報にこの列番がありません<span>回送・基地内・運休のいずれか（${esc(when)}）</span></button>`;
     if (p.state === 'before') return `<div class="pos-line idle"><b>−</b>まだ運行前です<span>${esc(when)}</span></div>`;
     if (p.state === 'done') return `<div class="pos-line idle"><b>−</b>運行を終えた列車です<span>${esc(when)}</span></div>`;
     return '';
@@ -622,52 +677,24 @@
     return { running, delayed, maxDelay, delayedList, missing, missingList, stale };
   }
   function renderPosBar() {
-    const bar = $('#posBar');
-    if (!bar) return;
-    bar.hidden = false;
-    let cls = 'idle', txt = '在線位置：タップで取得';
-    if (POS.status === 'loading') { cls = 'load'; txt = '在線位置を取得中…'; }
-    else if (POS.status === 'error') { cls = 'err'; txt = '在線位置を取得できません · タップで詳細'; }
+    const pill = $('#posPill');
+    if (!pill) return;
+    let cls = 'idle', txt = 'タップで取得';
+    if (POS.status === 'loading') { cls = 'load'; txt = '取得中…'; }
+    else if (POS.status === 'error') { cls = 'err'; txt = '取得できません'; }
     else if (POS.status === 'ready') {
       const dg = posDigest();
-      const parts = [`在線 ${dg.running}本`, `${posClock()}更新`];
-      if (dg.delayed) parts.push(`遅延 ${dg.delayed}本（最大${dg.maxDelay}分）`);
-      if (dg.missing) parts.push(`在線なし ${dg.missing}本`);
+      const parts = [`${dg.running}本`];
+      if (dg.delayed) parts.push(`遅延${dg.delayed}`);
+      if (dg.missing) parts.push(`なし${dg.missing}`);
       cls = (dg.maxDelay >= 5) || dg.missing >= 3 || dg.stale ? 'warn' : 'ok';
-      txt = parts.join(' · ');
-      if (POS.source === 'relay') txt += '・中継';
+      txt = parts.join('・');
     }
-    bar.dataset.state = cls;
-    const m = $('#posBarMain');
-    if (m) m.innerHTML = `<span class="pos-dot"></span><span class="pos-txt">${esc(txt)}</span>`;
-    const rf = $('#posRefresh');
-    if (rf) { rf.disabled = POS.status === 'loading'; rf.classList.toggle('spin', POS.status === 'loading'); }
-    const tb = $('.tabs');
-    if (tb) { const top = tb.offsetTop + tb.offsetHeight; bar.style.top = top + 'px'; const eb = $('#esBar'); if (eb && !eb.hidden) { bar.style.top = (eb.offsetTop + eb.offsetHeight) + 'px'; } }
-    renderAlert();
-  }
-  function renderAlert() {
-    const box = $('#alertBox');
-    if (!box) return;
-    const dg = posDigest();
-    let html = '';
-    if (POS.status === 'error') {
-      html = `<div class="alert-line"><b>⚠ 在線情報を取得できません</b><span>${esc(POS.error || '')}。公式の列車走行位置で確認してください。</span>
-        <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a></div>`;
-    } else if (dg) {
-      const items = [];
-      if (dg.stale) items.push(`在線情報が ${posClock()} のまま更新されていません`);
-      if (dg.maxDelay >= 5) items.push(`遅延 ${dg.delayed}本（最大 ${dg.maxDelay}分）`);
-      if (dg.missing >= 3) items.push(`在線情報にない列車 ${dg.missing}本（運休・運転見合わせの可能性）${dg.missingList.slice(0, 4).map((x) => x.no).join('・')}${dg.missing > 4 ? ' ほか' : ''}`);
-      if (items.length) {
-        html = `<div class="alert-line"><b>⚠ 運行異常の可能性</b><span>${items.map(esc).join('　/　')}</span>
-          <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a>
-          <a href="${POS.X}" target="_blank" rel="noopener noreferrer">西鉄公式X</a></div>
-          <p class="alert-note">在線情報（西鉄 列車走行位置）の位置・遅延と、在線していない列車から推定したものです。運休・運転見合わせの公式発表は公式サイト・Xでご確認ください。</p>`;
-      }
-    }
-    box.innerHTML = html;
-    box.hidden = !html;
+    pill.dataset.state = cls;
+    const v = $('#posVal');
+    if (v) v.textContent = txt;
+    const rf = $('#allRefresh');
+    if (rf) rf.classList.toggle('spin', ES.status === 'loading' || POS.status === 'loading');
   }
   function openPosDetail() {
     const dg = posDigest();
@@ -700,6 +727,549 @@
     else posFetch(true);
   }
 
+  /* ================= 指令室（運行管理卓） =================
+     西鉄「列車走行位置」（busnavi-railway.nnr.co.jp）の在線情報を、駅ブロック単位の
+     位置として路線ボード（指令室）に並べ、列番・種別・行先・遅延・車号・行路を連携する。
+     ・位置＝公式の在線情報（駅ブロック単位・数十秒〜数分前の情報）
+     ・「停車中／駅間走行中」＝公式の位置行と定刻（＋遅延）の突き合わせによる推定
+     ・在線情報に無い列車＝定刻上は運転中なら「未在線（運休・見合わせ等の可能性）」として推定表示
+     ・太宰府線・甘木線は公式の在線情報の対象外（分岐駅の情報と時刻表から推定）
+     公式に無い値を埋めることはしない。推定は画面上でも「推定」と明示する。
+     ========================================================= */
+  const CMD = {
+    filter: 'all',          // all | delay | lost | roster
+    zoom: 54,               // 1駅あたりの px
+    scroll: 0,
+    sel: null,
+    more: false,
+    auto: localStorage.getItem('cmd:auto') !== '0',
+  };
+  const CMD_ZOOM_STEPS = [34, 54, 78];
+  const CMD_TYPE_COLOR = { ltd: '#ff6b61', exp: '#3ecf8e', loc: '#6aa9ff', dead: '#9aa4b5' };
+  const CMD_DEPOT = { '筑紫': '筑紫基地', '花畑': '花畑基地', '西鉄柳川': '柳川基地' };
+  const CMD_MAJOR = ['福岡(天神)', '大橋', '西鉄二日市', '筑紫', '西鉄小郡', '花畑', '西鉄久留米', '大善寺', '西鉄柳川', '大牟田'];
+  /* ボード用の短縮駅名（縦書きで4文字以内に収める） */
+  const CMD_SHORT = {
+    '福岡(天神)': '天神', '西鉄平尾': '平尾', '都府楼前': '都府楼', '西鉄二日市': '二日市', '朝倉街道': '朝倉',
+    '三国が丘': '三国', '西鉄小郡': '小郡', '西鉄久留米': '久留米', '聖マリア病院前': '聖マリア',
+    '八丁牟田': '八丁', '西鉄柳川': '柳川', '西鉄中島': '中島', '西鉄渡瀬': '渡瀬', '西鉄銀水': '銀水',
+    '西鉄五条': '五条',
+  };
+  const cmdName = (n) => CMD_SHORT[n] || SHORT[n] || n;
+  const CMD_BRANCH = [
+    {
+      id: 'dz', name: '太宰府線', join: '西鉄二日市',
+      order: ['西鉄二日市', '西鉄五条', '太宰府'],
+      code: { '西鉄二日市': 'T13', '西鉄五条': 'D01', '太宰府': 'D02' },
+    },
+    {
+      id: 'ag', name: '甘木線', join: '宮の陣',
+      order: ['宮の陣', '五郎丸', '学校前', '古賀茶屋', '北野', '大城', '金島', '大堰', '本郷', '上浦', '馬田', '甘木'],
+      code: { '宮の陣': 'T25', '五郎丸': 'A11', '学校前': 'A10', '古賀茶屋': 'A09', '北野': 'A08', '大城': 'A07', '金島': 'A06', '大堰': 'A05', '本郷': 'A04', '上浦': 'A03', '馬田': 'A02', '甘木': 'A01' },
+    },
+  ];
+  const CMD_BRANCH_OF = {};
+  CMD_BRANCH.forEach((b) => b.order.forEach((n) => { if (!CMD_BRANCH_OF[n]) CMD_BRANCH_OF[n] = b.id; }));
+  /* 本線に無い（支線だけの）駅。MAIN は後段で定義されるため、ここでは実名で持つ */
+  const CMD_BRANCH_STN = ['西鉄五条', '太宰府', '五郎丸', '学校前', '古賀茶屋', '北野', '大城', '金島', '大堰', '本郷', '上浦', '馬田', '甘木'];
+  const cmdIsBranch = (name) => CMD_BRANCH_STN.indexOf(name) >= 0;
+
+  /* ---- 公式在線情報の行番号 ↔ 駅（0〜3＝西鉄福岡(天神)、以降1駅3行） ---- */
+  const posIdxOf = (row) => {
+    const r = Number(row);
+    if (!isFinite(r) || r < 0) return null;
+    return r <= 3 ? 0 : 1 + Math.floor((r - 4) / 3);
+  };
+  const posRowBase = (i) => (i <= 0 ? 0 : 4 + (i - 1) * 3);
+  const posRowSpan = (i) => (i === 0 ? 4 : 3);
+  const posFracOf = (row, i) => {
+    const v = (Number(row) - posRowBase(i)) / posRowSpan(i);
+    return Math.max(0, Math.min(1, isFinite(v) ? v : 0.5));
+  };
+  const tCode = (i) => 'T' + String(i + 1).padStart(2, '0');
+  const delayOf = (no) => {
+    const p = POS.trains[no];
+    if (!p) return null;
+    if (String(p.delay || '') !== '') { const d = Number(p.delay); if (isFinite(d)) return d; }
+    const m = String(p.delayMin || '').match(/(\d+)\s*分/);
+    return m ? +m[1] : 0;
+  };
+  /* 公式JSONの生成時刻（4時前は前日扱いの分） */
+  function posFileMin() {
+    const s = String(POS.fileTime || '');
+    if (s.length < 12) return null;
+    const h = +s.slice(8, 10), m = +s.slice(10, 12);
+    if (!isFinite(h) || !isFinite(m)) return null;
+    return (h < 4 ? h + 24 : h) * 60 + m;
+  }
+  /* 列番の時刻表（stops.js 優先、無ければ編成両数表の始発・終着だけ） */
+  function trainSched(dt, no) {
+    const seq = stopsOf(dt, no);
+    if (seq && seq.length >= 2) {
+      const a = seq.map(([si, ar, dp]) => ({ name: stopName(si), arr: ar, dep: dp }));
+      a.full = true;
+      return a;
+    }
+    const r = trainRec(dt, no);
+    if (!r) return null;
+    const a = toMin(r.dep), b = toMin(r.arr);
+    if (a == null || b == null) return null;
+    const list = [{ name: canon(r.from), arr: null, dep: a }, { name: canon(r.to), arr: b, dep: null }];
+    list.full = false;          // 各駅の時刻が無い（始発・終着だけ）
+    return list;
+  }
+  /* 定刻＋遅延で「いま駅に停まっているか／駅間か」を推定 */
+  function schedAt(sch, t) {
+    if (!sch || !sch.length) return null;
+    for (let i = 0; i < sch.length; i++) {
+      const s = sch[i], a = s.arr, d = s.dep;
+      if (a == null && d != null && t < d) return { at: true, name: s.name, i };
+      if (a != null && d != null && t >= a && t < d) return { at: true, name: s.name, i };
+      if (a != null && t < a) return { at: false, name: s.name, from: i > 0 ? sch[i - 1].name : null, i };
+    }
+    return { at: false, name: sch[sch.length - 1].name, from: sch.length > 1 ? sch[sch.length - 2].name : null, done: true, i: sch.length - 1 };
+  }
+
+  /* 列番1本ぶんの現在位置（公式の位置＋定刻からの推定） */
+  function cmdInfo(no) {
+    const p = POS.trains[no];
+    if (!p) return null;
+    const idx = posIdxOf(p.row);
+    if (idx == null || idx >= MAIN.length) return null;
+    const dt = todayType();
+    const st = MAIN[idx];
+    const prev = idx > 0 ? MAIN[idx - 1] : null;
+    const next = idx < MAIN.length - 1 ? MAIN[idx + 1] : null;
+    const dl = delayOf(no) || 0;
+    const f = posFileMin();
+    const sch = trainSched(dt, no);
+    const pred = sch && f != null ? schedAt(sch, f + dl) : null;
+    const at = !!(pred && pred.at && pred.name === st);
+    const done = !!(pred && pred.done);
+    const rec = trainRec(dt, no) || {};
+    return {
+      no, idx, row: Number(p.row), col: Number(p.col) || 0, st, prev, next,
+      frac: posFracOf(p.row, idx),
+      dir: String(p.dir) === '2' ? 'down' : 'up',
+      delay: dl, at, pred, done,
+      type: p.type || rec.type || '', dest: p.dest || (rec.to ? canon(rec.to) : ''),
+      cars: p.cars || '', doors: p.doors || '',
+      where: at ? `${st} 停車中` : (prev && next ? `${prev}〜${next} 走行中` : `${st} 付近`),
+      short: at ? st : (prev && next ? `${SHORT[prev] || prev}〜${SHORT[next] || next}` : st),
+    };
+  }
+
+  /* 在線情報に無い列車（定刻上は運転中）＝未在線の推定 */
+  function cmdGhosts(dt) {
+    if (POS.status !== 'ready') return [];
+    const f = posFileMin();
+    const data = STOPS.ready && STOPS.data && STOPS.data[dt] ? STOPS.data[dt] : null;
+    if (f == null || !data) return [];
+    const out = [];
+    for (const no of Object.keys(data)) {
+      if (POS.trains[no]) continue;
+      const sch = trainSched(dt, no);
+      if (!sch || sch.length < 2) continue;
+      const s0 = sch[0], s1 = sch[sch.length - 1];
+      const start = s0.dep != null ? s0.dep : s0.arr;
+      const end = s1.arr != null ? s1.arr : s1.dep;
+      if (start == null || end == null) continue;
+      if (f < start + 3 || f >= end) continue;
+      const rec = trainRec(dt, no) || {};
+      if (/回送/.test(rec.type || '')) continue;
+      const pred = schedAt(sch, f);
+      const nm = (pred && pred.name) || s0.name;
+      const i0 = MAIN.indexOf(s0.name), i1 = MAIN.indexOf(s1.name);
+      const branch = cmdIsBranch(nm) || (i0 < 0 && i1 < 0);
+      const dir = i0 >= 0 && i1 >= 0 ? (i1 > i0 ? 'down' : 'up') : 'down';
+      out.push({
+        no, type: rec.type || '', from: s0.name, to: s1.name, start, end,
+        at: nm, branch, dir, dest: s1.name,
+        minLate: Math.max(0, Math.round(f - start)),
+      });
+    }
+    return out;
+  }
+
+  /* 支線内の列車（公式在線情報の対象外・時刻表から推定） */
+  function cmdBranchTrains(dt) {
+    const f = posFileMin();
+    const res = { dz: [], ag: [] };
+    if (f == null) return res;
+    const all = D.trains[dt] || {};
+    for (const no of Object.keys(all)) {
+      const r = trainRec(dt, no);
+      if (!r) continue;
+      const from = canon(r.from), to = canon(r.to);
+      const a = toMin(r.dep), b = toMin(r.arr);
+      if (a == null || b == null) continue;
+      const t = f + (delayOf(no) || 0);
+      if (t < a || t >= b) continue;
+      const bid = CMD_BRANCH_OF[from] || CMD_BRANCH_OF[to];
+      if (!bid) continue;
+      const br = CMD_BRANCH.find((x) => x.id === bid);
+      const i0 = br.order.indexOf(from), i1 = br.order.indexOf(to);
+      if (i0 < 0 || i1 < 0) continue;     // 支線→本線をまたぐ列車は本線側で扱う
+      const frac = Math.max(0, Math.min(1, (t - a) / Math.max(1, b - a)));
+      res[bid].push({ no, type: r.type || '', pos: i0 + (i1 - i0) * frac, dest: to, delay: delayOf(no) || 0 });
+    }
+    return res;
+  }
+
+  /* 指令室の集計（1回の描画で使い回す） */
+  let CMD_DG = { key: '', val: null };
+  function cmdDigest() {
+    const dt = todayType();
+    const key = [POS.fetchedAt, POS.status, POS.fileTime, STOPS.status, dt, ES.status, ES.fetchedAt].join('|');
+    if (CMD_DG.key === key && CMD_DG.val) return CMD_DG.val;
+    const live = Object.keys(POS.trains).map(cmdInfo).filter(Boolean);
+    const ghosts = cmdGhosts(dt);
+    const lost = ghosts.filter((g) => !g.branch);
+    const onBranch = ghosts.filter((g) => g.branch);
+    let delayed = 0, maxDelay = 0;
+    live.forEach((t) => { if (t.delay > 0) { delayed++; if (t.delay > maxDelay) maxDelay = t.delay; } });
+    const stale = POS.status === 'ready' && Date.now() - POS.fetchedAt > 3 * 60 * 1000;
+    const val = { dt, live, ghosts, lost, onBranch, delayed, maxDelay, stale, running: live.length };
+    CMD_DG = { key, val };
+    return val;
+  }
+
+  /* 選択中の輪番（パターン＋行路日）の列番 */
+  function rosterNos() {
+    const p = getPattern(state.pattern);
+    const set = new Set();
+    if (!p) return { set, label: '', day: null };
+    const ws = workDays(p);
+    if (!ws.length) return { set, label: p.label, day: null };
+    let day = null;
+    if (state.diagramRow != null) day = ws.find((d) => d.row === state.diagramRow) || null;
+    if (!day) {
+      const now = nowMin();
+      day = ws.find((d) => { const a = toMin(firstDep(d)), b = toMin(lastRet(d)); return a != null && b != null && now >= a && now <= b; }) || null;
+    }
+    if (!day) day = ws[0];
+    tokenize(day.system || '').forEach((t) => { if (t.kind === 'train') set.add(t.v); });
+    return { set, label: `${p.label} ${CIRC[day.dutyNo - 1]} ${day.row}日目`, day };
+  }
+
+  /* ---------- 指令室ボード ---------- */
+  const cmdChipW = (step) => Math.max(30, Math.min(58, step - 8));
+  function cmdChipHTML(it, step) {
+    const w = cmdChipW(step);
+    const dl = it.delay || 0;
+    const cls = [typeClass(it.type), dl > 0 ? 'late' : '', it.kind !== 'live' ? it.kind : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
+    const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${dl ? '・' + dl + '分遅れ' : '・定時'}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : ''}`;
+    return `<button class="cchip ${cls}" style="left:${it.x.toFixed(1)}px;width:${w}px" data-cmd-train="${esc(it.no)}" title="${esc(title)}">
+        <b>${esc(it.no)}</b>${dl > 0 && w >= 40 ? `<i>+${dl}</i>` : ''}${it.kind === 'ghost' ? '<u>?</u>' : ''}</button>`;
+  }
+  function cmdLanesHTML(items, step, pad) {
+    const chipW = cmdChipW(step);
+    const list = items.slice();
+    list.forEach((it) => {
+      it.x = pad + it.idx * step + ((it.frac == null ? 0.4 : it.frac) * 0.78 + 0.11) * step;
+    });
+    list.sort((a, b) => a.x - b.x);
+    const lanes = [[], [], []];
+    const last = [-1e9, -1e9, -1e9];
+    list.forEach((it) => {
+      const gap = chipW + 3;
+      const free = (li) => it.x - last[li] >= gap;
+      const pre = (it.col === 2 || it.col === 4) ? 1 : 0;
+      const order = [pre, 1 - pre, 2];
+      let li = order.find((k) => free(k));
+      if (li == null) li = (it.x - last[0] > it.x - last[1]) ? 0 : 1;
+      last[li] = it.x;
+      lanes[li].push(it);
+    });
+    return lanes.filter((arr) => arr.length).map((arr) => `<div class="cmdb-lane">${arr.map((it) => cmdChipHTML(it, step)).join('')}</div>`).join('');
+  }
+  function cmdStationsHTML(names, codes, step, pad) {
+    return names.map((n, i) => {
+      const major = CMD_MAJOR.indexOf(n) >= 0;
+      const dep = CMD_DEPOT[n];
+      return `<div class="cstn${major ? ' major' : ''}${dep ? ' depot' : ''}" style="left:${(pad + i * step).toFixed(1)}px" title="${esc(n)}${codes[i] ? '（' + codes[i] + '）' : ''}">
+        <i class="tick"></i><b class="tc">${esc(codes[i] || '')}</b><span class="nm">${esc(cmdName(n))}</span>${dep ? `<em class="dep">${esc(dep)}</em>` : ''}</div>`;
+    }).join('');
+  }
+  function cmdBoardHTML(dg) {
+    const step = CMD.zoom;
+    const pad = Math.max(30, Math.round(step * 0.55));
+    const W = Math.round(pad * 2 + (MAIN.length - 1) * step);
+    const ros = rosterNos().set;
+    const filt = CMD.filter;
+    const keep = (no, delay, kind) => filt === 'all' || (filt === 'delay' && delay > 0) || (filt === 'lost' && kind === 'ghost') || (filt === 'roster' && ros.has(no));
+    const up = [], dn = [];
+    dg.live.forEach((t) => {
+      const it = {
+        no: t.no, idx: t.idx, frac: t.frac, col: t.col, delay: t.delay, type: t.type, dest: t.dest,
+        where: t.where, kind: 'live', dim: !keep(t.no, t.delay, 'live'),
+      };
+      (t.dir === 'up' ? up : dn).push(it);
+    });
+    dg.ghosts.forEach((g) => {
+      const idx = MAIN.indexOf(g.at);
+      if (idx < 0) return;
+      const it = {
+        no: g.no, idx, frac: 0.45, col: g.dir === 'down' ? 3 : 1, delay: 0, type: g.type, dest: g.dest,
+        where: `${g.at} 付近（在線情報になし・推定）`, kind: 'ghost', dim: !keep(g.no, 0, 'ghost'),
+      };
+      (g.dir === 'up' ? up : dn).push(it);
+    });
+    const codes = MAIN.map((_, i) => tCode(i));
+    const jumps = CMD_MAJOR.map((n) => `<button class="cjb" data-cmd-jump="${MAIN.indexOf(n)}">${esc(cmdName(n))}</button>`).join('');
+    return `<div class="cmd-bhead">
+        <b>天神大牟田線</b><span class="cmd-note">${MAIN.length}駅・公式の在線位置</span>
+        <span class="cmd-zoom"><button data-cmd-zoom="-"${CMD.zoom <= CMD_ZOOM_STEPS[0] ? ' disabled' : ''}>−</button><button data-cmd-zoom="+"${CMD.zoom >= CMD_ZOOM_STEPS[CMD_ZOOM_STEPS.length - 1] ? ' disabled' : ''}>＋</button></span>
+      </div>
+      <div class="cmd-jump">${jumps}</div>
+      <div class="cmdb">
+        <div class="cmdb-cap cap-up">▲ 上り（西鉄福岡(天神) 方面）</div>
+        <div class="cmdb-lanes lane-up">${cmdLanesHTML(up, step, pad)}</div>
+        <div class="cmdb-rail" style="width:${W}px"><i class="rail-line"></i>${cmdStationsHTML(MAIN, codes, step, pad)}</div>
+        <div class="cmdb-lanes lane-down">${cmdLanesHTML(dn, step, pad)}</div>
+        <div class="cmdb-cap cap-down">▼ 下り（大牟田 方面）</div>
+      </div>`;
+  }
+  function cmdBranchHTML(dt) {
+    const br = cmdBranchTrains(dt);
+    const step = 54, pad = 34;
+    const n = CMD_BRANCH.reduce((a, b) => a + br[b.id].length, 0);
+    const body = CMD_BRANCH.map((b) => {
+      const W = Math.round(pad * 2 + (b.order.length - 1) * step);
+      const codes = b.order.map((n) => b.code[n] || '');
+      const items = br[b.id].map((t) => ({
+        no: t.no, idx: Math.floor(t.pos), frac: t.pos - Math.floor(t.pos), col: 1,
+        delay: t.delay, type: t.type, kind: 'branch', dest: t.dest,
+        where: `${b.name}内（推定）`, dim: CMD.filter === 'lost',
+      }));
+      return `<div class="cmd-bhead sub sub2">
+          <b>${esc(b.name)}</b><span class="cmd-note">${esc(b.join)} 分岐・公式在線情報の対象外（時刻表から推定）</span>
+        </div>
+        <div class="cmdb branch">
+          <div class="cmdb-lanes lane-up br">${cmdLanesHTML(items, step, pad)}</div>
+          <div class="cmdb-rail" style="width:${W}px"><i class="rail-line single"></i>${cmdStationsHTML(b.order, codes, step, pad)}</div>
+        </div>`;
+    }).join('');
+    return `<details class="cmd-branch"${n ? ' open' : ''}>
+      <summary>支線（太宰府線・甘木線）<span>${n ? `${n}本 走行中・推定` : 'いま走行中の列車なし'}</span></summary>
+      ${body}
+    </details>`;
+  }
+  function cmdListHTML(dg) {
+    const ros = rosterNos();
+    const filt = CMD.filter;
+    const rows = [];
+    dg.live.forEach((t) => rows.push({
+      no: t.no, type: t.type, dest: t.dest, where: t.where, delay: t.delay, kind: 'live',
+      cars: esApplies(dg.dt) ? (esCarsOf(t.no) || {}) : null, roster: ros.set.has(t.no),
+    }));
+    dg.ghosts.forEach((g) => rows.push({
+      no: g.no, type: g.type, dest: g.dest,
+      where: g.branch ? `${g.at} 付近（支線内・推定）` : `${g.at} 付近（在線情報になし・推定）`,
+      delay: 0, kind: 'ghost', branch: g.branch, cars: null, roster: ros.set.has(g.no),
+    }));
+    rows.sort((a, b) => {
+      const rank = (r) => (r.kind === 'ghost' && !r.branch ? 0 : r.delay > 0 ? 1 : 2);
+      return rank(a) - rank(b) || b.delay - a.delay || a.no.localeCompare(b.no);
+    });
+    const shown = rows.filter((r) => filt === 'all' || (filt === 'delay' && r.delay > 0) || (filt === 'lost' && r.kind === 'ghost') || (filt === 'roster' && r.roster));
+    if (!shown.length) return '<p class="cmd-empty">該当する列車はありません。</p>';
+    const LIMIT = 10;
+    const cut = CMD.more ? shown : shown.slice(0, LIMIT);
+    const moreBtn = shown.length > LIMIT
+      ? `<button class="cmd-more" data-cmd-more="1">${CMD.more ? 'たたむ' : `残り ${shown.length - LIMIT}本を表示`}</button>` : '';
+    return `<div class="cmd-list">${cut.map((r) => {
+      const car = r.cars && !r.cars.none && r.cars.cars ? r.cars.cars : '';
+      const cls = [typeClass(r.type), r.delay > 0 ? 'late' : '', r.kind === 'ghost' ? 'ghost' : '', CMD.sel === r.no ? 'sel' : ''].filter(Boolean).join(' ');
+      return `<button class="cmd-row ${cls}" data-cmd-train="${esc(r.no)}">
+        <span class="no">${esc(r.no)}</span>
+        <span class="ty">${esc(typeShort(r.type))}</span>
+        <span class="dest">${esc(SHORT[r.dest] || r.dest || '—')} 行</span>
+        <span class="dl">${r.delay > 0 ? `+${r.delay}分` : r.kind === 'ghost' ? '未在線?' : '定時'}</span>
+        <span class="sub"><span class="ps">${esc(r.where)}</span>${car ? `<span class="car">車 ${esc(car)}</span>` : ''}${r.roster ? '<span class="ros">輪番</span>' : ''}</span>
+      </button>`;
+    }).join('')}</div>${moreBtn}`;
+  }
+  function cmdLiveHTML() {
+    const dg = cmdDigest();
+    const ros = rosterNos();
+    const ok = POS.status === 'ready';
+    const time = ok ? posClock() : '—';
+    const src = POS.source === 'direct' ? '公式から直接' : POS.source === 'relay' ? '中継経由' : '—';
+    const ft = String(POS.fileTime || '');
+    const gen = ft.length >= 12 ? `${ft.slice(8, 10)}:${ft.slice(10, 12)}:${ft.slice(12, 14)}` : '—';
+    const stale = dg.stale ? `<span class="cmd-stale">情報が更新されていません</span>` : '';
+    const alert = ok && (dg.maxDelay >= 5 || dg.lost.length >= 3)
+      ? `<div class="cmd-alert"><b>⚠ 運行異常の可能性</b><span>${dg.maxDelay >= 5 ? `遅延 ${dg.delayed}本（最大 ${dg.maxDelay}分）` : ''}${dg.maxDelay >= 5 && dg.lost.length >= 3 ? ' ／ ' : ''}${dg.lost.length >= 3 ? `在線情報にない列車 ${dg.lost.length}本` : ''}</span>
+          <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a><a href="${POS.X}" target="_blank" rel="noopener noreferrer">西鉄公式X</a></div>`
+      : '';
+    const errBox = POS.status === 'error'
+      ? `<div class="cmd-alert err"><b>⚠ 在線情報を取得できません</b><span>${esc(POS.error || '')}</span>
+          <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a></div>` : '';
+    const loadBox = (POS.status === 'loading' || POS.status === 'idle')
+      ? `<div class="cmd-alert load"><b>在線情報を取得しています…</b><span>西鉄「列車走行位置」</span></div>` : '';
+    return `<div class="cmd-meta">
+        <span class="cmd-live"><i></i>${ok ? 'LIVE' : POS.status === 'error' ? 'OFF' : '…'}</span>
+        <span>${esc(dg.dt === 'holiday' ? '土日祝ダイヤ' : '平日ダイヤ')} ・ ${time} 現在</span>
+        <span>公式生成 ${esc(gen)}</span>
+        <span>${esc(src)}</span>
+        <span class="cmd-count">次回 <b id="cmdCount">--</b></span>
+        ${stale}
+      </div>
+      <div class="cmd-sum">
+        <div class="tile"><span>在線</span><b>${dg.running}</b><i>本</i></div>
+        <div class="tile ${dg.delayed ? 'warn' : ''}"><span>遅延</span><b>${dg.delayed}</b><i>本</i></div>
+        <div class="tile ${dg.maxDelay >= 5 ? 'warn' : ''}"><span>最大</span><b>${dg.maxDelay ? '+' + dg.maxDelay : '±0'}</b><i>分</i></div>
+        <div class="tile ${dg.lost.length ? 'alert' : ''}"><span>未在線<em>推定</em></span><b>${dg.lost.length}</b><i>本</i></div>
+      </div>
+      ${loadBox}${errBox}${alert}
+      <div class="cmd-filters">
+        <button data-cmd-filter="all" class="${CMD.filter === 'all' ? 'on' : ''}">全列車 <b>${dg.running + dg.ghosts.length}</b></button>
+        <button data-cmd-filter="delay" class="${CMD.filter === 'delay' ? 'on' : ''}">遅延 <b>${dg.delayed}</b></button>
+        <button data-cmd-filter="lost" class="${CMD.filter === 'lost' ? 'on' : ''}">未在線 <b>${dg.lost.length}</b></button>
+        <button data-cmd-filter="roster" class="${CMD.filter === 'roster' ? 'on' : ''}">輪番 <b>No.${esc(String((getPattern(state.pattern) || {}).no || ''))}</b></button>
+      </div>
+      ${cmdBoardHTML(dg)}
+      ${cmdBranchHTML(dg.dt)}
+      <div class="cmd-lhead"><b>在線・運転状況</b><span>${CMD.filter === 'roster' ? esc(ros.label) : CMD.filter === 'delay' ? '遅延のみ' : CMD.filter === 'lost' ? '未在線の推定のみ' : '全列車'}</span></div>
+      ${cmdListHTML(dg)}
+      <details class="cmd-help">
+        <summary>位置・推定の見方</summary>
+        <p>位置＝西鉄「列車走行位置」の在線情報（駅ブロック単位・数十秒〜数分前）。「停車中／走行中」は公式の位置と定刻（＋遅延）を突き合わせた<b>推定</b>です。</p>
+        <p>破線＝在線情報に該当が無い列車（定刻上は運転中＝運休・運転見合わせ等の可能性、<b>推定</b>）。回送・基地内・運休のいずれかで、運休と断定はできません。</p>
+        <p>太宰府線・甘木線は公式の在線情報の対象外のため、時刻表から推定した位置を表示しています。公式の発表・駅の案内とあわせてご確認ください。</p>
+      </details>`;
+  }
+  function renderCmd(main) {
+    main.innerHTML = `<section class="cmd">
+      <div class="cmd-top">
+        <div class="cmd-title"><span class="cmd-badge">指令</span><h2>運行管理卓</h2></div>
+        <div class="cmd-tools">
+          <button class="cmd-btn" data-cmd-refresh aria-label="再取得"${POS.status === 'loading' ? ' disabled' : ''}>↻</button>
+          <button class="cmd-btn ${CMD.auto ? 'on' : ''}" data-cmd-auto aria-label="自動更新">自動</button>
+        </div>
+      </div>
+      <div id="cmdLive">${cmdLiveHTML()}</div>
+    </section>`;
+    bindCmdScroll(CMD.scroll);
+    updateCmdClock();
+  }
+  function paintCmd() {
+    const live = $('#cmdLive');
+    if (!live) return;
+    const box = $('.cmdb');
+    const sx = box ? box.scrollLeft : CMD.scroll;
+    live.innerHTML = cmdLiveHTML();
+    bindCmdScroll(sx);
+    updateCmdClock();
+  }
+  function bindCmdScroll(x) {
+    const box = $('.cmdb');
+    if (!box) return;
+    box.scrollLeft = x || 0;
+    box.addEventListener('scroll', () => { CMD.scroll = box.scrollLeft; }, { passive: true });
+  }
+  function updateCmdClock() {
+    const el = $('#cmdCount');
+    if (!el) return;
+    if (!CMD.auto) { el.textContent = '停止'; return; }
+    if (POS.status !== 'ready') { el.textContent = '--'; return; }
+    const left = Math.max(0, Math.round(60 - (Date.now() - POS.fetchedAt) / 1000));
+    el.textContent = left + '秒';
+  }
+  function cmdScrollToIdx(idx) {
+    const box = $('.cmdb');
+    if (!box) return;
+    const x = Math.max(30, CMD.zoom * 0.55) + idx * CMD.zoom;
+    box.scrollLeft = Math.max(0, x - box.clientWidth / 2);
+    CMD.scroll = box.scrollLeft;
+  }
+  /* 列車の詳細（指令室から開く） */
+  function openCmdTrain(no) {
+    const dt = todayType();
+    const info = cmdInfo(no);
+    const ghost = cmdGhosts(dt).find((g) => g.no === no) || null;
+    const rec = trainRec(dt, no);
+    const sch = trainSched(dt, no) || [];
+    const live = !!info;
+    const dl = live ? info.delay : 0;
+    const type = (live ? info.type : ghost ? ghost.type : rec ? rec.type : '') || '';
+    const dest = (live ? info.dest : ghost ? ghost.dest : rec && canon(rec.to)) || '';
+    const rows = [];
+    if (live) {
+      const seg = info.prev && info.next ? `${info.prev}〜${info.next}` : info.st;
+      rows.push(['現在位置', `${info.st} 付近（${seg} 間）・${info.at ? '停車中' : '走行中（推定）'}`]);
+      rows.push(['方向', info.dir === 'up' ? '上り ・ 天神方面' : '下り ・ 大牟田方面']);
+      if (info.cars) rows.push(['両数', `${info.cars}両${info.doors ? ` ・ ${info.doors}ドア` : ''}`]);
+    } else if (ghost) {
+      rows.push(['状態', ghost.branch ? `支線内（${ghost.at} 付近・推定）` : '在線情報に該当なし（運休・見合わせ等の可能性／推定）']);
+      rows.push(['定刻', `${fmtMin(ghost.start)} ${ghost.from} → ${fmtMin(ghost.end)} ${ghost.to}`]);
+      rows.push(['運転開始から', `${ghost.minLate}分経過`]);
+    } else {
+      rows.push(['状態', '在線情報にも時刻表にも見つかりません']);
+    }
+    if (rec && (rec.from || rec.to)) rows.push(['全区間', `${esc(rec.dep)} ${esc(canon(rec.from))} → ${esc(rec.arr)} ${esc(canon(rec.to))}${rec.carType ? ` ・ ${esc(rec.carType)}形${esc(rec.cars)}両` : ''}`]);
+    const uses = [];
+    for (const pp of D.patterns) for (const dd of pp.days)
+      if (dd.system && tokenize(dd.system).some((t) => t.kind === 'train' && t.v === no)) {
+        const lg = (dd.legs || []).find((x) => x.t.includes(no));
+        uses.push({ pp, dd, lg });
+      }
+    const stops = sch.length ? `<h4 class="tl-title" style="margin-top:14px">${sch.full ? '各駅の着発' : '始発・終着（各駅の時刻は未収録）'}</h4>
+      <div class="stop-list cmd-stops">${sch.map((s) => {
+        const here = live && s.name === info.st;
+        return `<div class="${here ? 'here' : ''}"><span>${esc(s.name)}${here ? ' ◀ いま' : ''}</span><b>${s.arr != null ? fmtMin(s.arr) : '〃'}</b><i>${s.dep != null ? fmtMin(s.dep) : '〃'}</i></div>`;
+      }).join('')}</div>` : '';
+    showSheet(`<div class="sheet-head"><h2>列車 ${esc(no)}</h2><button class="sheet-close" data-close>✕</button></div>
+      <div class="cmd-sheet">
+        <div class="cs-hero ${typeClass(type)}">
+          <span class="no">${esc(no)}</span>
+          <span class="ty">${esc(typeShort(type))}</span>
+          <span class="dest">${esc(dest || '—')} 行</span>
+          <span class="st ${live ? (dl > 0 ? 'late' : 'on') : 'lost'}">${live ? (dl > 0 ? `+${dl}分` : '定時') : '未在線?'}</span>
+        </div>
+        <dl class="es-dl">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>
+        ${esCarLine(no, dt)}
+        ${stops}
+        ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
+          uses.map((u) => `<div class="res-card" data-goto="${u.pp.id}:${u.dd.row}">
+            <div class="t"><span class="badge work">${u.pp.label}</span><span class="badge off">${CIRC[u.dd.dutyNo - 1]}</span>
+            <span class="run">${u.dd.row}日目 ${esc(firstDep(u.dd))}→${esc(lastRet(u.dd))}</span></div></div>`).join('') : ''}
+        <div class="btn-row">
+          <a class="btn" href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a>
+          <a class="btn" href="${POS.X}" target="_blank" rel="noopener noreferrer">西鉄公式X</a>
+        </div>
+        <p class="es-caution">位置は西鉄「列車走行位置」の在線情報（駅ブロック単位）です。停車中／走行中は公式の位置行と定刻（＋遅延）から推定したもので、実際と異なることがあります。在線情報に無い列車は、回送・基地内・運休・運転見合わせのいずれかで、運休と断定はできません。</p>
+      </div>`, () => {
+      $$('[data-goto]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => {
+        const [pid, r] = el.dataset.goto.split(':');
+        closeSheet(); setTimeout(() => openDuty(pid, +r), 80);
+      }));
+      const here = $('#sheetBody .cmd-stops .here');
+      const sheet = $('#sheet');
+      if (here && sheet) sheet.scrollTop = Math.max(0, here.offsetTop - 190);
+    });
+  }
+  /* 行路・検索・ダイヤから指令室の列車へ */
+  function goCmd(no) {
+    state.view = 'cmd';
+    CMD.sel = no;
+    CMD.filter = 'all';
+    closeSheet();
+    render();
+    setTimeout(() => {
+      const info = cmdInfo(no);
+      if (info) cmdScrollToIdx(info.idx);
+      const chip = document.querySelector(`[data-cmd-train="${no}"]`);
+      if (chip) chip.classList.add('sel');
+      openCmdTrain(no);
+    }, 90);
+  }
+  function cmdJumpTo(idx) {
+    if (idx == null || idx < 0) return;
+    cmdScrollToIdx(idx);
+  }
+
   /* ================= ROSTER ================= */
   function renderRoster(main) {
     const pats = patternsOf(state.dayType);
@@ -718,12 +1288,13 @@
       <div class="chips" id="patChips">
         ${pats.map((x) => `<button class="chip ${x.id === state.pattern ? 'on' : ''}" data-p="${x.id}">No.${x.no}</button>`).join('')}
       </div>
-      <dl class="summary">
-        <div class="stat"><dt>サイクル</dt><dd>${p.cycleDays}<small>日</small></dd></div>
-        <div class="stat"><dt>勤務日数</dt><dd>${ws.length}<small>日</small></dd></div>
-        <div class="stat"><dt>平均拘束</dt><dd>${fmtDur(avg)}</dd></div>
-      </dl>
-      <p class="hint-line">${p.label}　公休/代休 ${offs}日 ・ 週休 ${weekly}日　<button class="linkbtn" id="symBtn">記号の見方</button></p>`;
+      <p class="roster-stats">
+        <span>勤務 <b>${ws.length}</b>日</span>
+        <span>公休 <b>${offs}</b>日</span>
+        <span>週休 <b>${weekly}</b>日</span>
+        <span>平均拘束 <b>${fmtDur(avg)}</b></span>
+        <button class="linkbtn small sym" id="symBtn">？ 記号</button>
+      </p>`;
 
     const weeks = [...new Set(p.days.map((d) => d.week))];
     for (const w of weeks) {
@@ -767,29 +1338,25 @@
 
   function dayCard(p, d) {
     if (d.kind === 'off') {
-      return `<div class="day off"><div class="dn"><b>${d.row}</b>日目</div>
-        <div class="mid"><div class="route">公休 ・ 代休</div></div>
-        <div class="right"><span class="badge off">休</span></div></div>`;
+      return `<div class="day off"><div class="dn">${d.row}<i>日目</i></div>
+        <div class="mid"><span class="route">公休・代休</span></div><span class="badge off">休</span></div>`;
     }
     if (d.kind === 'weekly') {
-      return `<div class="day weekly"><div class="dn"><b>${d.row}</b>日目</div>
-        <div class="mid"><div class="route">週休</div></div>
-        <div class="right"><span class="badge weekly">週休</span></div></div>`;
+      return `<div class="day weekly"><div class="dn">${d.row}<i>日目</i></div>
+        <div class="mid"><span class="route">週休</span></div><span class="badge weekly">週休</span></div>`;
     }
     const split = d.duties.length > 1;
     return `<div class="day work" data-row="${d.row}" data-p="${p.id}">
-      <div class="dn"><b>${d.row}</b>日目</div>
+      <div class="dn">${d.row}<i>日目</i></div>
       <div class="mid">
         <div class="times">
           <span class="t">${esc(firstDep(d))}</span><span class="arrow">→</span><span class="t">${esc(lastRet(d))}</span>
           ${split ? '<span class="badge split">分割</span>' : ''}
+          <span class="kousoku">${fmtDur(totalKousoku(d))}</span>
         </div>
         <div class="route">${reportPlace(d) ? `<span class="place" style="--pc:${placeColor(reportPlace(d))}">${esc(placeLabel(reportPlace(d)))}発</span>` : ''}${esc(routeText(d))}</div>
       </div>
-      <div class="right">
-        <span class="kousoku">${fmtDur(totalKousoku(d))}</span><span class="k-label">拘束</span>
-        <div class="duty-tag">${CIRC[d.dutyNo - 1]}</div>
-      </div>
+      <span class="chev">›</span>
     </div>`;
   }
 
@@ -799,7 +1366,7 @@
     const p = getPattern(pid);
     const d = p.days.find((x) => x.row === row);
     if (!d) return;
-    showSheet(dutyHeader(p, d) + flowStrip(d, p.dayType) + memoBox(`${pid}:${row}`) + dutyBody(p, d, p.dayType), () => {
+    showSheet(dutyHeader(p, d) + dutyBody(p, d, p.dayType, `${pid}:${row}`), () => {
       bindMemo(`${pid}:${row}`);
       $$('[data-train]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => openTrain(el.dataset.train)));
     });
@@ -813,23 +1380,24 @@
       duties: [{ dep: x.dep, ret: x.ret, start: x.start, end: x.end, kousoku: x.kousoku, kousokuMin: 0 }],
       system: x.system, legs: x.legs || [],
     };
-    showSheet(dutyHeader(p, fake, x.name) + flowStrip(fake, p.dayType) + dutyBody(p, fake, p.dayType), () => {
+    showSheet(dutyHeader(p, fake, x.name) + dutyBody(p, fake, p.dayType, `x:${pid}:${idx}`), () => {
       $$('[data-train]', $('#sheetBody')).forEach((el) => el.addEventListener('click', () => openTrain(el.dataset.train)));
     });
   }
 
   function dutyHeader(p, d, extraName) {
+    const sp = startPlaceOf(d), ep = endPlaceOf(d);
     return `<div class="duty-head">
-      <div class="row1">
-        <span class="badge work">${p.label}</span>
-        <span class="badge off">${CIRC[(d.dutyNo || 1) - 1]} 行路</span>
-        ${d.row ? `<span class="badge off">${d.row}日目</span>` : ''}
-        ${extraName ? `<span class="badge split">${esc(extraName)}</span>` : ''}
-        ${reportPlace(d) ? `<span class="place" style="--pc:${placeColor(reportPlace(d))}">出勤 ${esc(placeLabel(reportPlace(d)))}</span>` : ''}
-        ${endPlaceOf(d) ? `<span class="place ret" style="--pc:${(endPlaceOf(d).depot ? '#12897c' : '#8698a9')}">退勤 ${esc(endPlaceOf(d).name)}${endPlaceOf(d).yobi ? '（予備）' : ''}</span>` : ''}
+      <div class="dh-top">
+        <b>${esc(p.label)}</b><span class="dh-duty">${CIRC[(d.dutyNo || 1) - 1]} 行路</span>
+        ${d.row ? `<span class="dh-day">${d.row}日目</span>` : ''}
+        ${extraName ? `<span class="dh-day">${esc(extraName)}</span>` : ''}
       </div>
-      <div class="times">${esc(firstDep(d))}<i>→</i>${esc(lastRet(d))}<span>拘束 ${fmtDur(totalKousoku(d))}</span></div>
-      <div class="route">${d.duties.map((x) => `${esc(x.start)} → ${esc(x.end)}`).join('　／　')}</div>
+      <div class="dh-times">${esc(firstDep(d))}<i>→</i>${esc(lastRet(d))}<em>拘束 ${fmtDur(totalKousoku(d))}</em></div>
+      <div class="dh-meta">
+        <span class="place" style="--pc:${placeColor(reportPlace(d))}">出勤 ${esc(placeLabel(reportPlace(d)))}</span>
+        ${ep ? `<span class="place" style="--pc:${ep.depot ? '#12897c' : '#8698a9'}">退勤 ${esc(ep.name)}${ep.yobi ? '（予備）' : ''}</span>` : ''}
+      </div>
     </div>`;
   }
 
@@ -885,26 +1453,38 @@
     if (ta) ta.addEventListener('input', () => localStorage.setItem('memo:' + key, ta.value));
   }
 
-  function dutyBody(p, d, dt) {
+  function dutyBody(p, d, dt, memoKey) {
     if (!d.system) return `<div class="empty">この日の乗務系統は未読取です。</div>`;
     const toks = tokenize(d.system);
-    return `<div class="system-block">
-        <h4>乗務系統（原本の表記）</h4>
-        ${d.systemRaw && d.systemRaw !== d.system ? '<p class="flow-note">※ 先頭・末尾の駅は輪番表の始・終に合わせています</p>' : ''}
-        <div class="system-raw">${toks.map((t) => t.kind === 'train'
-          ? `<span class="tok-train">${esc(t.v)}</span>`
-          : t.kind === 'stn' || t.kind === 'yobi' ? stationPill(t.v, false)
-            : t.kind === 'ws' ? ' '
-            : `<span class="tok-mark">${esc(t.v)}</span>`).join('')}</div>
-        <p class="sys-legend"><b>チ</b>筑紫駅（交代）　<b>チ出・チ入</b>筑紫車両基地　<b>チヨ・ヨ</b>予備（入出庫代行＝休憩）　<b>ハ</b>花畑駅</p>
-      </div>
-      <h4 class="tl-title">乗務タイムライン（乗り込み駅 → 降りる駅）</h4>
-      ${esNoteText(dt) ? `<p class="es-note">${esNoteText(dt)}</p>` : ''}
+    const diaWarn = (ES.status === 'ready' && ES.diaType !== dt)
+      ? `<p class="es-note warn-dia">今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤのため、${dt === 'holiday' ? '土日祝' : '平日'}の車号は表示していません。</p>`
+      : '';
+    return `<h4 class="tl-title">乗務タイムライン</h4>
+      ${diaWarn}
       ${renderTimeline(d, dt)}
-      <div class="btn-row">
-        <button class="btn primary" data-diagram="${p.id}:${d.row}">ダイヤグラムで見る</button>
-        <button class="btn" data-symbols>記号の見方</button>
-      </div>`;
+      <div class="btn-row tight">
+        <button class="btn small" data-diagram="${p.id}:${d.row}">ダイヤで見る</button>
+        <button class="btn small" data-symbols>記号の見方</button>
+      </div>
+      <details class="fold">
+        <summary>1日の流れ（${legsOf(d).length}区間）</summary>
+        <div class="fold-body">${flowStrip(d, dt)}</div>
+      </details>
+      <details class="fold">
+        <summary>乗務系統（原本の表記）</summary>
+        <div class="fold-body">
+          <div class="system-raw">${toks.map((t) => t.kind === 'train'
+            ? `<span class="tok-train">${esc(t.v)}</span>`
+            : t.kind === 'stn' || t.kind === 'yobi' ? stationPill(t.v, false)
+              : t.kind === 'ws' ? ' '
+              : `<span class="tok-mark">${esc(t.v)}</span>`).join('')}</div>
+          <p class="sys-legend"><b>チ</b>筑紫駅（交代）　<b>チ出・チ入</b>筑紫車両基地　<b>チヨ・ヨ</b>予備（入出庫代行＝休憩）　<b>ハ</b>花畑駅</p>
+        </div>
+      </details>
+      ${memoKey ? `<details class="fold">
+        <summary>メモ・申し送り</summary>
+        <div class="fold-body">${memoBox(memoKey)}</div>
+      </details>` : ''}`;
   }
 
   function placeSpan(name, depot, yobi, hand) {
@@ -1071,7 +1651,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v25';
+    s.src = 'stops.js?v26';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
@@ -1124,26 +1704,33 @@
       <div class="chips" id="patChips">
         ${patternsOf(state.dayType).map((x) => `<button class="chip ${x.id === state.diagram ? 'on' : ''}" data-p="${x.id}">No.${x.no}</button>`).join('')}
       </div>
-      <div class="chips" id="dayChips">${ws.map((x) => `<button class="chip ${x.row === state.diagramRow ? 'on' : ''}" data-r="${x.row}">${CIRC[x.dutyNo - 1]} ${x.row}日目</button>`).join('')}</div>
-      <div class="dg-title"><b>${esc(firstDep(d))} → ${esc(lastRet(d))}</b>　${esc(p.label)}・${d.row}日目・行路${CIRC[d.dutyNo - 1]}<span>拘束 ${fmtDur(totalKousoku(d))}</span></div>
-      <div class="dg-tools">
-        <button class="tchip ${state.dgFit ? 'on' : ''}" data-zoom="fit">全体</button>
-        <button class="tchip" data-zoom="in">拡大</button>
-        <button class="tchip" data-zoom="out">縮小</button>
-        <span class="dg-scale">${perMinTxt}</span>
-      </div>
-      <div class="legend">
-        <span><i class="ltd"></i>特急</span><span><i class="exp"></i>急行</span><span><i class="loc"></i>普通</span><span><i class="dead"></i>回送</span>
-        <span><i class="rest"></i>休憩（予備代行）</span>
-        <span class="lg-sym">○乗／降　◇入換（×）　■留置（H入）　┄出入庫</span>
+      <div class="chips" id="dayChips">${ws.map((x) => `<button class="chip ${x.row === state.diagramRow ? 'on' : ''}" data-r="${x.row}">${x.row}日目</button>`).join('')}</div>
+      <div class="dg-title compact">
+        <b>${esc(firstDep(d))} → ${esc(lastRet(d))}</b>
+        <span>拘束 ${fmtDur(totalKousoku(d))}${state.dgFit ? '' : ` ・ 1時間≒${Math.round(state.dgPerMin * 60)}px`}</span>
+        <span class="dg-tools">
+          <button class="tchip ${state.dgFit ? 'on' : ''}" data-zoom="fit">全体</button>
+          <button class="tchip" data-zoom="out">−</button>
+          <button class="tchip" data-zoom="in">＋</button>
+        </span>
       </div>
       ${STOPS.status === 'loading' ? '<p class="dg-hint">各駅の着発時刻を読み込み中…</p>' : ''}
       ${(() => { const g = diagramSVG(d, p.dayType); return `<div class="dg-flex">
         <div class="dg-rail" id="dgRail">${g.rail}</div>
         <div class="diagram-wrap" id="dgWrap">${g.svg}</div>
       </div><p class="dg-hint">${g.note || ''}</p>`; })()}
-      <p class="dg-hint">縦軸＝駅、横軸＝時刻（横にスクロール）。細い実線が各列車のスジ（全区間）、○はこの行路の乗・降、◇は入換（×）、■は留置（H入・H出）、┄は入出庫です。スジをタップすると列車の詳細（列番・時刻・車号・入換）が出ます。<br>支線は分岐駅のすぐ下の行に並べています（太宰府は二日市、甘木線は宮の陣）。</p>
-      <div class="btn-row"><button class="btn primary" data-open="${p.id}:${d.row}">この行路の詳細</button></div>`;
+      <div class="btn-row tight"><button class="btn primary" data-open="${p.id}:${d.row}">この行路の詳細</button></div>
+      <details class="fold">
+        <summary>凡例・見方</summary>
+        <div class="fold-body">
+          <div class="legend">
+            <span><i class="ltd"></i>特急</span><span><i class="exp"></i>急行</span><span><i class="loc"></i>普通</span><span><i class="dead"></i>回送</span>
+            <span><i class="rest"></i>休憩（予備代行）</span>
+            <span class="lg-sym">○乗／降　◇入換（×）　■留置（H入）　┄出入庫</span>
+          </div>
+          <p class="dg-hint">縦軸＝駅、横軸＝時刻（横にスクロール）。細い実線が各列車のスジ（全区間）、○はこの行路の乗・降、◇は入換（×）、■は留置（H入・H出）、┄は入出庫です。スジをタップすると列車の詳細（列番・時刻・車号・入換）が出ます。<br>支線は分岐駅のすぐ下の行に並べています（太宰府は二日市、甘木線は宮の陣）。</p>
+        </div>
+      </details>`;
     $('#dayTypeSeg').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-t]'); if (!b) return;
       state.dayType = b.dataset.t; state.diagram = patternsOf(state.dayType)[0].id; state.diagramRow = null; render();
@@ -1523,25 +2110,25 @@
       </div>
       <div class="filter-block">
         <div class="filter-label">② 出勤時刻</div>
-        <div class="pin-block">
-          <div class="pin-label">ピンポイント時刻（正確な出勤時刻で1発特定）</div>
-          <div class="range-row">
-            <input type="time" id="pinTime" step="60" value="${searchState.exact || ''}" aria-label="出勤時刻をピンポイント指定">
-            <button class="btn primary small" id="pinGo">この時刻で探す</button>
-            ${searchState.exact ? '<button class="btn small" id="pinClear">解除</button>' : ''}
-          </div>
-          <p class="pin-hint">例：7:06 → 7:06出勤の勤務だけを表示（時刻は輪番表の出勤時刻）</p>
-        </div>
-        <div class="filter-label sub">時間帯・範囲から探す</div>
-        <div class="time-chips" id="timeChips">
-          ${TIME_PRESETS.map((t) => `<button class="tchip ${searchState.range === t.r ? 'on' : ''}" data-r="${t.r}">${t.label}</button>`).join('')}
-        </div>
         <div class="range-row">
-          <input type="time" id="tFrom" value="${searchState.from}" aria-label="開始時刻">
-          <span>〜</span>
-          <input type="time" id="tTo" value="${searchState.to}" aria-label="終了時刻">
-          <button class="btn small" id="applyRange">この範囲</button>
+          <input type="time" id="pinTime" step="60" value="${searchState.exact || ''}" aria-label="出勤時刻をピンポイント指定">
+          <button class="btn primary small" id="pinGo">この時刻で探す</button>
+          ${searchState.exact ? '<button class="btn small" id="pinClear">解除</button>' : ''}
         </div>
+        <details class="fold tight"${(searchState.range || searchState.from || searchState.to) ? ' open' : ''}>
+          <summary>時間帯・範囲で絞る</summary>
+          <div class="fold-body">
+            <div class="time-chips" id="timeChips">
+              ${TIME_PRESETS.map((t) => `<button class="tchip ${searchState.range === t.r ? 'on' : ''}" data-r="${t.r}">${t.label}</button>`).join('')}
+            </div>
+            <div class="range-row">
+              <input type="time" id="tFrom" value="${searchState.from}" aria-label="開始時刻">
+              <span>〜</span>
+              <input type="time" id="tTo" value="${searchState.to}" aria-label="終了時刻">
+              <button class="btn small" id="applyRange">この範囲</button>
+            </div>
+          </div>
+        </details>
       </div>
       <div class="filter-block">
         <div class="filter-label">③ ダイヤ</div>
@@ -1767,8 +2354,9 @@
     const h = (location.hash || '').replace(/^#\/?/, '');
     if (!h) return false;
     const [view, a, b] = h.split('/');
-    if (!['roster', 'duty', 'diagram', 'search'].includes(view)) return false;
+    if (!['roster', 'duty', 'diagram', 'search', 'cmd'].includes(view)) return false;
     state.view = view;
+    if (view === 'cmd' && a) state.cmdHash = a;
     if (a && D.patterns.some((p) => p.id === a)) {
       state.pattern = a; state.dayType = getPattern(a).dayType;
       state.diagram = a;
@@ -1789,10 +2377,12 @@
     if (state.view === 'roster') renderRoster(main);
     else if (state.view === 'duty') renderDutyList(main);
     else if (state.view === 'diagram') renderDiagram(main);
+    else if (state.view === 'cmd') renderCmd(main);
     else renderSearch(main);
     syncHash();
     window.scrollTo({ top: 0 });
     if (pendingDuty) { const pd = pendingDuty; pendingDuty = null; openDuty(pd.pid, pd.row); }
+    if (state.cmdHash) { const no = state.cmdHash; state.cmdHash = null; setTimeout(() => goCmd(no), 60); }
   }
 
   $('#tabs').addEventListener('click', (e) => {
@@ -1803,6 +2393,46 @@
       state.dayType = p.dayType; state.diagram = p.id; state.diagramRow = null;
     }
     render();
+  });
+
+  /* ---- 指令室・列車詳細への入口（行路・検索・ダイヤのどこからでも） ---- */
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cmd]');
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    goCmd(b.dataset.cmd);
+  }, true);
+  $('#main').addEventListener('click', (e) => {
+    const tr = e.target.closest('[data-cmd-train]');
+    if (tr) {
+      e.preventDefault();
+      CMD.sel = tr.dataset.cmdTrain;
+      $$('.cchip.sel, .cmd-row.sel').forEach((x) => x.classList.remove('sel'));
+      tr.classList.add('sel');
+      openCmdTrain(tr.dataset.cmdTrain);
+      return;
+    }
+    const f = e.target.closest('[data-cmd-filter]');
+    if (f) { CMD.filter = f.dataset.cmdFilter; paintCmd(); return; }
+    if (e.target.closest('[data-cmd-refresh]')) { posFetch(true); return; }
+    const au = e.target.closest('[data-cmd-auto]');
+    if (au) {
+      CMD.auto = !CMD.auto;
+      localStorage.setItem('cmd:auto', CMD.auto ? '1' : '0');
+      au.classList.toggle('on', CMD.auto);
+      updateCmdClock();
+      if (CMD.auto) posFetch(true);
+      return;
+    }
+    const z = e.target.closest('[data-cmd-zoom]');
+    if (z) {
+      const i = CMD_ZOOM_STEPS.indexOf(CMD.zoom);
+      CMD.zoom = CMD_ZOOM_STEPS[Math.max(0, Math.min(CMD_ZOOM_STEPS.length - 1, i + (z.dataset.cmdZoom === '+' ? 1 : -1)))];
+      paintCmd(); return;
+    }
+    const j = e.target.closest('[data-cmd-jump]');
+    if (j) { cmdJumpTo(+j.dataset.cmdJump); return; }
+    if (e.target.closest('[data-cmd-more]')) { CMD.more = !CMD.more; paintCmd(); return; }
   });
 
   const savedTheme = localStorage.getItem('theme');
@@ -1827,19 +2457,21 @@
   posLoad();
   renderPosBar();
   posFetch(false);
-  if ($('#posBarMain')) $('#posBarMain').addEventListener('click', () => openPosAlert());
-  if ($('#posRefresh')) $('#posRefresh').addEventListener('click', () => posFetch(true));
-  if ($('#alertBox')) $('#alertBox').addEventListener('click', () => openPosAlert());
+  if ($('#posPill')) $('#posPill').addEventListener('click', () => {
+    if (POS.status === 'ready' || POS.status === 'loading') { state.view = 'cmd'; render(); }
+    else openPosAlert();
+  });
+  if ($('#allRefresh')) $('#allRefresh').addEventListener('click', () => { posFetch(true); if (ES.status !== 'loading') esFetch(true); });
   setInterval(() => {
-    if (document.visibilityState === 'visible') { posFetch(false); renderPosBar(); }
+    if (document.visibilityState === 'visible' && CMD.auto) { posFetch(false); renderPosBar(); }
   }, 60 * 1000);
+  setInterval(() => { if (state.view === 'cmd') updateCmdClock(); }, 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') posFetch(true);
   });
-  if ($('#esBarMain')) $('#esBarMain').addEventListener('click', () => {
+  if ($('#esPill')) $('#esPill').addEventListener('click', () => {
     if (ES.status === 'idle') esFetch(true); else openEsDetail();
   });
-  if ($('#esRefresh')) $('#esRefresh').addEventListener('click', () => esFetch(true));
   window.addEventListener('resize', () => renderEsBar());
 
   window.addEventListener('hashchange', () => { if (applyHash()) render(); });
