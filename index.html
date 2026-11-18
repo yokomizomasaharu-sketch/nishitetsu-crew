@@ -7,9 +7,9 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="description" content="西鉄 乗務員支援システム — 運行指令室（列車在線・遅延）・輪番・乗務系統・ダイヤグラム（2026.3.14改正）">
 <title>西鉄 乗務員支援システム</title>
-<link rel="manifest" href="manifest.json?v26">
+<link rel="manifest" href="manifest.json?v28">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css?v26">
+<link rel="stylesheet" href="style.css?v28">
 </head>
 <body>
 <div id="app">
@@ -18,9 +18,10 @@
       <div class="logo" aria-hidden="true">🚃</div>
       <div class="brand-text">
         <h1>西鉄 乗務員支援</h1>
-        <p class="sub">車掌 輪番・乗務系統 <span id="verBadge">2026.3.14改正</span></p>
+        <p class="sub"><span id="brandSubText">筑紫 車掌 輪番・乗務系統</span> <span id="verBadge">2026.3.14改正</span></p>
       </div>
     </div>
+    <button id="selBtn" class="sel-btn" aria-label="乗務所・職種の切替">筑紫・車掌</button>
     <button id="themeBtn" class="icon-btn" aria-label="表示テーマ切替">◐</button>
   </header>
 
@@ -43,12 +44,37 @@
   <footer class="foot">
     <details class="foot-more">
       <summary>出典・注意</summary>
-      <p>出典：車掌 輪番表／乗務系統表（2026.3.14改正・社内資料）／列車時刻は「西鉄列車編成両数表 2026/03/14改正」を参照</p>
+      <p>出典：運転士・車掌 輪番表／乗務系統表（2026.3.14改正・社内資料）／列車時刻は「西鉄列車編成両数表 2026/03/14改正」を参照</p>
       <p>車号はえれサイト4（elesite-next.com）の運用情報（利用者の投稿）を取得して表示しています。未投稿・誤り・あとからの変更があります。乗務前に運用表でご確認ください。</p>
       <p>在線位置は西鉄「列車走行位置」（busnavi-railway.nnr.co.jp）の情報を中継サービス経由で取得しています。位置は駅ブロック単位で、数十秒〜数分前の情報です。停車中／走行中・未在線は推定を含みます。</p>
       <p class="warn">関係者限り・リンクの無断共有／転載はご遠慮ください。</p>
     </details>
   </footer>
+</div>
+
+<div id="startScreen" hidden>
+  <div class="start-card">
+    <div class="start-logo" aria-hidden="true">🚃</div>
+    <h2>西鉄 乗務員支援</h2>
+    <p class="start-sub">乗務所と職種を選んでください</p>
+    <div class="start-group">
+      <div class="start-label">乗務所</div>
+      <div class="start-opts">
+        <button type="button" data-sel-depot="chikushi">筑紫乗務所</button>
+        <button type="button" data-sel-depot="yanagawa">柳川乗務所</button>
+      </div>
+    </div>
+    <div class="start-group">
+      <div class="start-label">職種</div>
+      <div class="start-opts">
+        <button type="button" data-sel-role="driver">運転士</button>
+        <button type="button" data-sel-role="conductor">車掌</button>
+      </div>
+    </div>
+    <button type="button" id="startGo" class="start-go">はじめる</button>
+    <button type="button" id="startClose" class="start-close">キャンセル</button>
+    <p class="start-note">選択はこの端末に保存されます。あとからヘッダーのボタンでも切り替えできます。</p>
+  </div>
 </div>
 
 <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
@@ -57,7 +83,7 @@
   <div class="sheet-body" id="sheetBody"></div>
 </div>
 
-<script src="data.js?v26"></script>
-<script src="app.js?v26"></script>
+<script src="data.js?v28"></script>
+<script src="app.js?v28"></script>
 </body>
 </html>

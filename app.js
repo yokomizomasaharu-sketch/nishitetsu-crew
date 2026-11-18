@@ -9,7 +9,11 @@
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const CIRC = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
 
-  const state = { view: 'roster', dayType: 'weekday', pattern: 'H1', diagram: 'H1', diagramRow: null, dgPerMin: 2.4, dgFit: false };
+  const SEL_KEY = 'crew:selection';
+  let savedSel = null;
+  try { savedSel = JSON.parse(localStorage.getItem(SEL_KEY) || 'null'); } catch (e) {}
+  const state = { view: 'roster', dayType: 'weekday', pattern: 'H1', diagram: 'H1', diagramRow: null, dgPerMin: 2.4, dgFit: false,
+    depot: (savedSel && savedSel.depot) || 'chikushi', role: (savedSel && savedSel.role) || 'conductor' };
 
   /* ---------- utils ---------- */
   const toMin = (t) => {
@@ -48,6 +52,7 @@
   const CODE_COLOR = {
     フ: '#4ea1ff', チ: '#22b8a6', ハ: '#5ec14f', 二: '#a78bfa', 小: '#f0a13c', 善: '#34a86b',
     大: '#ef5a52', 太: '#f472b6', 津: '#f6c445', 聖: '#c084fc', 久: '#60a5fa', 甘: '#a3d927', 柳: '#38bdf8',
+    ヤ: '#38bdf8', オ: '#818cf8',
   };
   const CODE_INFO = D.codes.reduce((a, c) => (a[c.code] = c, a), {});
   const isStation = (code) => !!CODE_COLOR[code];
@@ -66,7 +71,7 @@
   }
 
   /* ---------- system string parser ---------- */
-  const CODES = [...Object.keys(CODE_COLOR), ...YOBI, '入出', '解放', 'H入', 'H出', '出', '入', '換', '便', '×', '~', '/', '(', ')', '普', 'H']
+  const CODES = [...Object.keys(CODE_COLOR), ...YOBI, '入出', '解放', 'H入', 'H出', '出', '入', '換', '便', '×', '~', '/', '(', ')', '普', '手', '予', '番', '優', '北', 'H']
     .sort((a, b) => b.length - a.length);
 
   function tokenize(str) {
@@ -94,11 +99,11 @@
 
   /* 出勤場所（乗務開始の駅・基地）を系統の頭から判定
      出庫（チ出）なら筑紫車両基地、ふつうのチは筑紫駅（交代）、ヨは予備代行で駅 */
-  const PLACE_RE = /^(チヨ|ハヨ|フ|チ|ハ|二|小|善|大|太|津|聖|久|甘|柳)/;
-  const PLACE_LABEL = { 'チヨ': '筑紫車両基地', 'チ': '筑紫駅', 'ハヨ': '花畑車両基地', 'ハ': '花畑駅' };
-  const PLACE_COLOR = { 'チヨ': '#12897c', 'チ': '#22b8a6', 'ハヨ': '#7bc043', 'ハ': '#5ec14f' };
-  const PLACE_SYMBOL = { 'チヨ': 'チ', 'チ': 'チ', 'ハヨ': 'ハ', 'ハ': 'ハ' };
-  const STN_KEY = { '筑紫': 'チ', '花畑': 'ハ' };
+  const PLACE_RE = /^(チヨ|ハヨ|フ|チ|ハ|二|小|善|大|太|津|聖|久|甘|柳|ヤ|オ)/;
+  const PLACE_LABEL = { 'チヨ': '筑紫車両基地', 'チ': '筑紫駅', 'ハヨ': '花畑車両基地', 'ハ': '花畑駅', 'ヤ': '西鉄柳川駅', 'オ': '大牟田駅' };
+  const PLACE_COLOR = { 'チヨ': '#12897c', 'チ': '#22b8a6', 'ハヨ': '#7bc043', 'ハ': '#5ec14f', 'ヤ': '#38bdf8', 'オ': '#818cf8' };
+  const PLACE_SYMBOL = { 'チヨ': 'チ', 'チ': 'チ', 'ハヨ': 'ハ', 'ハ': 'ハ', 'ヤ': 'ヤ', 'オ': 'オ' };
+  const STN_KEY = { '筑紫': 'チ', '花畑': 'ハ', '西鉄柳川': 'ヤ', '大牟田': 'オ' };
   function reportPlace(d) {
     const s = String((d.duties && d.duties[0] && d.duties[0].start) || '');
     const m = s.match(PLACE_RE);
@@ -129,7 +134,8 @@
   };
 
   /* ---------- helpers ---------- */
-  const patternsOf = (dt) => D.patterns.filter((p) => p.dayType === dt);
+  const inSel = (p) => (p.depot || 'chikushi') === state.depot && (p.role || 'conductor') === state.role;
+  const patternsOf = (dt) => D.patterns.filter((p) => p.dayType === dt && inSel(p));
   const getPattern = (id) => D.patterns.find((p) => p.id === id);
   const workDays = (p) => p.days.filter((d) => d.kind === 'work');
   const totalKousoku = (d) => d.duties.reduce((a, x) => a + (x.kousokuMin || 0), 0);
@@ -343,7 +349,7 @@
   function esNoteText(dt) {
     if (ES.status === 'ready') {
       if (ES.diaType !== dt) {
-        return `今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤ（${esc(ES.diaName)}）のため、${dt === 'holiday' ? '土日祝' : '平日'}の車号は表示していません。`;
+        return `今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤ（${esc(ES.diaName)}）のため、${dt === 'holiday' ? '土日祝' : '平日'}の車号（編成番号）は表示していません。形式・両数は編成両数表の情報です。`;
       }
       return `車号＝えれサイト4の運用情報（${esc(esClock(ES.fetchedAt))}取得・利用者の投稿）。「—」は未投稿または回送です。${ES.staleFailed ? '現在再取得できていないため前回の情報です。' : ''}`;
     }
@@ -533,7 +539,8 @@
         const m = String((e2 && e2.message) || '');
         POS.error = /HTTP/.test(m) ? m : '西鉄の在線情報に接続できません（通信エラー）';
         renderPosBar();
-        if (state.view === 'diagram' || !$('#sheet').hidden) renderKeep();
+        if (state.view === 'cmd') paintCmd();
+        else if (state.view === 'diagram' || !$('#sheet').hidden) renderKeep();
         return;
       }
     }
@@ -573,6 +580,7 @@
       POS.status = 'error';
       POS.error = '在線情報を読めませんでした';
       renderPosBar();
+      if (state.view === 'cmd') paintCmd();
     }
   }
   function posTick() {
@@ -656,7 +664,7 @@
     // 今日のダイヤで「今走っているはず」の列車が在線情報にない
     const dt = todayType();
     for (const p of D.patterns) {
-      if (p.dayType !== dt) continue;
+      if (p.dayType !== dt || !inSel(p)) continue;
       for (const d of p.days) {
         for (const lg of (d.legs || [])) {
           const no = lg.t[0];
@@ -934,11 +942,15 @@
     return val;
   }
 
-  /* 選択中の輪番（パターン＋行路日）の列番 */
+  /* 指令室の輪番フィルタ用：選択中パターンの「今日のダイヤ種別・同No」の列番
+     輪番画面で別種別（平日⇔土日祝）を選んだまま指令室へ来ても、今日の種別に読み替える */
   function rosterNos() {
-    const p = getPattern(state.pattern);
+    const sel = getPattern(state.pattern);
     const set = new Set();
-    if (!p) return { set, label: '', day: null };
+    if (!sel) return { set, label: '', day: null };
+    let p = sel;
+    const dt = todayType();
+    if (sel.dayType !== dt) p = patternsOf(dt).find((x) => x.no === sel.no) || sel;
     const ws = workDays(p);
     if (!ws.length) return { set, label: p.label, day: null };
     let day = null;
@@ -1287,7 +1299,7 @@
         <button data-t="holiday" class="${state.dayType === 'holiday' ? 'on' : ''}">土日祝</button>
       </div>
       <div class="chips" id="patChips">
-        ${pats.map((x) => `<button class="chip ${x.id === state.pattern ? 'on' : ''}" data-p="${x.id}">No.${x.no}</button>`).join('')}
+        ${pats.map((x) => `<button class="chip ${x.id === state.pattern ? 'on' : ''}" data-p="${x.id}">${esc(x.chip || ('No.' + x.no))}</button>`).join('')}
       </div>
       <p class="roster-stats">
         <span>勤務 <b>${ws.length}</b>日</span>
@@ -1458,7 +1470,7 @@
     if (!d.system) return `<div class="empty">この日の乗務系統は未読取です。</div>`;
     const toks = tokenize(d.system);
     const diaWarn = (ES.status === 'ready' && ES.diaType !== dt)
-      ? `<p class="es-note warn-dia">今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤのため、${dt === 'holiday' ? '土日祝' : '平日'}の車号は表示していません。</p>`
+      ? `<p class="es-note warn-dia">今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤのため、${dt === 'holiday' ? '土日祝' : '平日'}の車号（編成番号）は表示していません。形式・両数は編成両数表の情報です。</p>`
       : '';
     return `<h4 class="tl-title">乗務タイムライン</h4>
       ${diaWarn}
@@ -1704,7 +1716,7 @@
         <button data-t="holiday" class="${state.dayType === 'holiday' ? 'on' : ''}">土日祝</button>
       </div>
       <div class="chips" id="patChips">
-        ${patternsOf(state.dayType).map((x) => `<button class="chip ${x.id === state.diagram ? 'on' : ''}" data-p="${x.id}">No.${x.no}</button>`).join('')}
+        ${patternsOf(state.dayType).map((x) => `<button class="chip ${x.id === state.diagram ? 'on' : ''}" data-p="${x.id}">${esc(x.chip || ('No.' + x.no))}</button>`).join('')}
       </div>
       <div class="chips" id="dayChips">${ws.map((x) => `<button class="chip ${x.row === state.diagramRow ? 'on' : ''}" data-r="${x.row}">${x.row}日目</button>`).join('')}</div>
       <div class="dg-title compact">
@@ -2068,6 +2080,7 @@
   function reportIndex() {
     const rows = [];
     for (const p of D.patterns) {
+      if (!inSel(p)) continue;
       for (const d of p.days) {
         if (d.kind !== 'work') continue;
         rows.push({ p, d, place: reportPlace(d), dep: toMin(firstDep(d)), ret: toMin(lastRet(d)) });
@@ -2349,6 +2362,8 @@
     $('#sheet').hidden = true; $('#sheetBackdrop').hidden = true;
     $('#sheetBody').innerHTML = '';
     document.body.style.overflow = '';
+    // 詳細を開いたときに付けた深いハッシュ（#duty/K1/3 等）を画面のハッシュへ戻す
+    if ((location.hash || '').indexOf('/') >= 0) history.replaceState(null, '', '#' + state.view);
   }
   $('#sheetBackdrop').addEventListener('click', closeSheet);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
@@ -2391,6 +2406,7 @@
 
   $('#tabs').addEventListener('click', (e) => {
     const b = e.target.closest('.tab'); if (!b) return;
+    closeSheet();
     state.view = b.dataset.view;
     if (state.view === 'diagram') {
       const p = getPattern(state.pattern);
@@ -2446,6 +2462,65 @@
     document.documentElement.dataset.theme = cur;
     localStorage.setItem('theme', cur);
   });
+
+  /* ---------- 乗務所・職種の選択（初期画面） ---------- */
+  const DEPOTS = { chikushi: '筑紫', yanagawa: '柳川' };
+  const ROLES = { driver: '運転士', conductor: '車掌' };
+  let hasSel = !!savedSel;
+  let pendingSel = { depot: state.depot, role: state.role };
+  function ensureSelectionPatterns() {
+    if (!inSel(getPattern(state.pattern) || {})) {
+      const p0 = patternsOf(state.dayType)[0] || D.patterns.find((p) => inSel(p));
+      if (p0) { state.pattern = p0.id; state.dayType = p0.dayType; }
+    }
+    if (!inSel(getPattern(state.diagram) || {})) state.diagram = state.pattern;
+  }
+  function updateBrand() {
+    const bt = $('#brandSubText');
+    if (bt) bt.textContent = `${DEPOTS[state.depot]} ${ROLES[state.role]} 輪番・乗務系統`;
+    const sb = $('#selBtn');
+    if (sb) sb.textContent = `${DEPOTS[state.depot]}・${ROLES[state.role]}`;
+  }
+  function paintStartScreen() {
+    $$('#startScreen [data-sel-depot]').forEach((b) => b.classList.toggle('on', pendingSel.depot === b.dataset.selDepot));
+    $$('#startScreen [data-sel-role]').forEach((b) => b.classList.toggle('on', pendingSel.role === b.dataset.selRole));
+    const cl = $('#startClose');
+    if (cl) cl.style.display = hasSel ? '' : 'none';
+  }
+  function openStartScreen() {
+    const sc = $('#startScreen');
+    if (!sc) return;
+    pendingSel = { depot: state.depot, role: state.role };
+    paintStartScreen();
+    sc.hidden = false;
+  }
+  function closeStartScreen() { const sc = $('#startScreen'); if (sc) sc.hidden = true; }
+  function applySelection() {
+    state.depot = pendingSel.depot; state.role = pendingSel.role;
+    hasSel = true;
+    try { localStorage.setItem(SEL_KEY, JSON.stringify({ depot: state.depot, role: state.role })); } catch (e) {}
+    ensureSelectionPatterns();
+    updateBrand();
+    closeStartScreen();
+    state.view = 'roster';
+    render();
+  }
+  ensureSelectionPatterns();
+  updateBrand();
+  const startEl = $('#startScreen');
+  if (startEl) {
+    startEl.addEventListener('click', (e) => {
+      const d = e.target.closest('[data-sel-depot]');
+      if (d) { pendingSel.depot = d.dataset.selDepot; paintStartScreen(); return; }
+      const r = e.target.closest('[data-sel-role]');
+      if (r) { pendingSel.role = r.dataset.selRole; paintStartScreen(); return; }
+      if (e.target.closest('#startGo')) applySelection();
+      else if (e.target.closest('#startClose')) closeStartScreen();
+    });
+    if (!hasSel) openStartScreen();
+  }
+  const selBtnEl = $('#selBtn');
+  if (selBtnEl) selBtnEl.addEventListener('click', openStartScreen);
 
   if (D && D.version) $('#verBadge').textContent = D.version;
   applyHash();
