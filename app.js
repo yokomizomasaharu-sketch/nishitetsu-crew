@@ -289,6 +289,7 @@
 
   function esState() { return ES.status; }
   function esApplies(dt) { return ES.status === 'ready' && ES.diaType === dt; }
+  const esSecRank = (s) => (/以北$/.test(s) ? 1 : /以南$/.test(s) ? 2 : 0);
   function esCarsOf(no) {
     const ent = ES.map[esNorm(no)];
     if (!ent || !ent.length) return null;                 // えれサイトに列番の掲載なし（回送など）
@@ -305,7 +306,7 @@
       const seen = groups[k];
       if (!seen.some((x) => x.cars === e.cars && x.pos === e.pos)) seen.push(e);
     });
-    const parts = order.map((k) => {
+    const parts = order.sort((a, b) => esSecRank(a) - esSecRank(b)).map((k) => {
       const body = groups[k].map((e) => (e.name ? `${e.cars}（${e.name}）` : e.cars)).join('＋');
       return k ? `${k} ${body}` : body;
     });
