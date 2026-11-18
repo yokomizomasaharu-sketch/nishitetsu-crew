@@ -480,7 +480,8 @@
         source = 'direct';
       } catch (e2) {
         POS.status = 'error';
-        POS.error = (e2 && e2.message) || '取得できません';
+        const m = String((e2 && e2.message) || '');
+        POS.error = /HTTP/.test(m) ? m : '西鉄の在線情報に接続できません（通信エラー）';
         renderPosBar();
         if (state.view === 'diagram' || !$('#sheet').hidden) renderKeep();
         return;
@@ -667,8 +668,6 @@
     }
     box.innerHTML = html;
     box.hidden = !html;
-    const eb = $('#esBar');
-    if (eb) eb.style.top = '';
   }
   function openPosDetail() {
     const dg = posDigest();
@@ -1072,7 +1071,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v24';
+    s.src = 'stops.js?v25';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
