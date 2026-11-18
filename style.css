@@ -952,6 +952,29 @@ html[data-theme="light"] .rail-row.branch { color: #2f5fd0; }
 .tkb-chip.dim { opacity: .2; }
 .tkb-chip.sel rect.body { stroke: #fff; stroke-width: 2; }
 
+/* ---- 配線図ボード（v31：実物の配線略図画像＋チップ重ね） ---- */
+.cmdb.tkb-img { padding: 0; background: #212121; }
+.tkb-img-inner { min-width: 100%; }
+.tkb-img-wrap { position: relative; line-height: 0; background: #212121; }
+.tkb-img-map { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+.tkb-img .img-chip {
+  position: absolute; z-index: 2; transform: translate(-50%, -50%);
+  display: flex; align-items: center; justify-content: center;
+  height: 21px; padding: 0 6px; border-radius: 5px; border: 1px solid #2b4155;
+  background: #111f2a; color: #cfe1ef; font-family: ui-monospace, monospace;
+  font-size: 11px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap;
+  cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .6);
+}
+.tkb-img .img-chip.ltd { background: #2a1414; color: #ff9b93; border-color: #6b2b28; }
+.tkb-img .img-chip.exp { background: #0e241d; color: #6ee7b7; border-color: #1e5e49; }
+.tkb-img .img-chip.loc { background: #101d2c; color: #8ec2f7; border-color: #24476b; }
+.tkb-img .img-chip.dead { background: #161a1f; color: #9aa4b5; border-color: #2e3742; }
+.tkb-img .img-chip.late { box-shadow: 0 0 0 2px #f5b23c, 0 1px 4px rgba(0, 0, 0, .6); }
+.tkb-img .img-chip.ghost { background: #1d1010; color: #ff9b93; border-color: #7a2e2a; border-style: dashed; }
+.tkb-img .img-chip.branch { border-style: dashed; }
+.tkb-img .img-chip.dim { opacity: .2; }
+.tkb-img .img-chip.sel { box-shadow: 0 0 0 2px #fff, 0 0 10px rgba(255, 255, 255, .45); z-index: 3; }
+
 /* ---------- えれサイト4：運用表（アプリ内） ---------- */
 .es-pend-wrap summary { list-style: none; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--fg-3); margin-top: 12px; }
 .es-pend-wrap summary::-webkit-details-marker { display: none; }

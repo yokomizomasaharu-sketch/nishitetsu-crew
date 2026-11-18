@@ -747,13 +747,13 @@
      ========================================================= */
   const CMD = {
     filter: 'all',          // all | delay | lost | roster
-    zoom: 54,               // 1駅あたりの px
+    zoom: 160,              // 配線図ボード（画像）の表示幅 %
     scroll: 0,
     sel: null,
     more: false,
     auto: localStorage.getItem('cmd:auto') !== '0',
   };
-  const CMD_ZOOM_STEPS = [34, 54, 78];
+  const CMD_ZOOM_STEPS = [100, 160, 230];
   const CMD_TYPE_COLOR = { ltd: '#ff6b61', exp: '#3ecf8e', loc: '#6aa9ff', dead: '#9aa4b5' };
   const CMD_DEPOT = { '筑紫': '筑紫基地', '花畑': '花畑基地', '西鉄柳川': '柳川基地' };
   const CMD_MAJOR = ['福岡(天神)', '大橋', '西鉄二日市', '筑紫', '西鉄小郡', '花畑', '西鉄久留米', '大善寺', '西鉄柳川', '大牟田'];
@@ -1079,31 +1079,32 @@
         <i class="tick"></i><b class="tc">${esc(codes[i] || '')}</b><span class="nm">${esc(cmdName(n))}</span>${dep ? `<em class="dep">${esc(dep)}</em>` : ''}</div>`;
     }).join('');
   }
-  /* ---------- 配線図ボード（v30） ----------
-     raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）の折り返しレイアウトに沿い、
-     天神大牟田線を5段（1段10駅・接続記号A〜D）＋太宰府線・甘木線の段で描く自作SVG。
-     駅ごとの配線（待避線・渡り線・単線区間と交換駅・分岐・両車両基地のヤード・両終端の
-     頭端配線）は図面の読み取りと公開情報（各駅の線数・待避の有無）でデータ化した。
-     単線区間は聖マリア病院前以東〜大善寺と蒲池以東〜開（図面・公開情報で一致）。
-     在線チップは駅ブロック単位の位置を上下線の帯に置く（番線レベルの特定はしない）。
+  /* ---------- 配線図ボード（v31） ----------
+     ユーザー指示（2026-11-18）により自作SVGの略図をやめ、実物の配線略図
+     そのものを土台にする：raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」
+     （紺狐）の画像（assets/track-map.jpg、1320×1242）をそのまま表示し、
+     在線チップを絶対配置（%座標）で線路上に重ねる。貝塚線の段も画像の
+     まま含むが、在線情報の対象外のためチップは置かない。
+     駅座標は画像から実測したマッピング表（TKIMG_*）を使う：本線は段ごと
+     （10駅）の駅プレート中心x・上り線y・下り線y、支線は駅ごとの点。
+     位置は従来どおり駅ブロック単位で、番線レベルの特定はしない。
      番線レベルの詳細は下部の駅詳細パネル（二日市・天神）にだけ置く。 */
-  const TKB_PAD = 44;
-  const TKB_ROWS = [
-    { from: 0, conn: 'A' }, { from: 10, conn: 'B' }, { from: 20, conn: 'C' }, { from: 30, conn: 'D' }, { from: 40, conn: null },
+  const TKIMG_W = 1320, TKIMG_H = 1242;
+  /* 本線：段ごと（MAIN index 0-9 / 10-19 / …）の駅中心x・上り線y・下り線y（原図px） */
+  const TKIMG_BANDS = [
+    { xs: [159, 274.5, 343.5, 413, 501.5, 603.5, 673, 742, 830.5, 933], up: 53, dn: 60 },
+    { xs: [156, 225, 403, 504.5, 574, 643, 732, 979, 1047.5, 1117], up: 250, dn: 257 },
+    { xs: [156, 244.5, 347, 416, 485, 584, 686, 821, 922.5, 1071], up: 382, dn: 389 },
+    { xs: [176, 297.5, 399.5, 518, 600, 682.5, 751.5, 834, 932.5, 1127], up: 524, dn: 530 },
+    { xs: [176, 346.5, 436, 537.5, 639.5, 761.5, 844, 926.5, 995, 1114], up: 612, dn: 619 },
   ];
-  /* 駅ごとの配線要素（MAIN の index）
-     siding=待避線（上下両側）/ scissors=両端シザーズ（久留米）/ pass=単線の交換ループ（上側）
-     passBoth=単線の両側ループ（柳川）/ stub=上側の短い側線（江の浦）/ junction=支線分岐 / yard=車両基地 */
-  const TKB_FEAT = {
-    4: { siding: 1 }, 8: { siding: 1 }, 16: { siding: 1, yard: 'chikushi' }, 21: { siding: 1 },
-    26: { siding: 1, scissors: 1 }, 27: { siding: 1 }, 31: { siding: 1 }, 44: { siding: 1 },
-    12: { junction: 'dz' }, 24: { junction: 'ag' },
-    29: { pass: 1 }, 30: { pass: 1 }, 40: { pass: 1 }, 41: { pass: 1 },
-    38: { passBoth: 1, yard: 'yanagawa' }, 42: { stub: 1 },
+  /* 支線：駅ごとの点（原図px）。単線のため方向で線の上下にずらして置く */
+  const TKIMG_BRANCH = {
+    dz: [{ x: 250, y: 750 }, { x: 389.5, y: 790 }, { x: 501.5, y: 790 }],
+    ag: [{ x: 140, y: 1017 }, { x: 235, y: 1017 }, { x: 324, y: 1017 }, { x: 412.5, y: 1017 }, { x: 491.5, y: 1017 }, { x: 570.5, y: 1017 }, { x: 659.5, y: 1017 }, { x: 748, y: 1017 }, { x: 837, y: 1017 }, { x: 926, y: 1017 }, { x: 995, y: 1017 }, { x: 1084, y: 1017 }],
   };
-  /* 単線になる駅間（始点 index の集合）と片渡り線のある駅間 */
-  const TKB_SINGLE = new Set([28, 29, 30, 36, 37, 38, 39, 40, 41, 42]);
-  const TKB_XOVER = new Set([7]);
+  /* 車両基地ヤードの位置（原図px）：筑紫＝MAIN 16、西鉄柳川＝MAIN 38 */
+  const TKIMG_YARD = { 16: { x: 880, y: 165 }, 38: { x: 1080, y: 490 } };
   const tkbLabel = (it) => {
     const ts = typeShort(it.type);
     const tp = (ts === '特急' || ts === '急行' || ts === 'NL' || ts === '回送') ? ts : '';
@@ -1129,22 +1130,6 @@
       <text y="4">${esc(label)}</text>
     </g>`;
   }
-  /* チップをボード幅でクランプし、同じ向きの帯の中で段ずらしして重なりを無くす */
-  function tkbPlace(items, W, levels) {
-    const placed = [];
-    items.forEach((it) => {
-      it.w = tkbChipW(tkbLabel(it));
-      it.x = Math.max(it.w / 2 + 3, Math.min(W - it.w / 2 - 3, it.x));
-    });
-    items.slice().sort((a, b) => a.x - b.x).forEach((it) => {
-      let lv = levels[levels.length - 1];
-      for (const L of levels) {
-        if (!placed.some((p) => p.level === L && Math.abs(p.x - it.x) < (p.w + it.w) / 2 + 3)) { lv = L; break; }
-      }
-      it.level = lv;
-      placed.push(it);
-    });
-  }
   /* 詳細図用：1つの番線にチップを横並びにする */
   function tkbRow(items, cx, y) {
     if (!items.length) return '';
@@ -1156,191 +1141,116 @@
   const tkbKeep = (ros, filt) => (no, delay, kind) =>
     filt === 'all' || (filt === 'delay' && delay > 0) || (filt === 'lost' && kind === 'ghost') || (filt === 'roster' && ros.has(no));
 
-  function tkbMainRowHTML(row, dg, keep, ros) {
-    const step = CMD.zoom, pad = TKB_PAD;
-    const yardRow = row.from === 10 || row.from === 30;
-    const upY = yardRow ? 116 : 82, dnY = upY + 26, midY = upY + 13;
-    const X = (i) => pad + (i - row.from) * step;
-    const W = Math.round(pad * 2 + 9 * step + 30);
-    const H = dnY + 82;
-    let s = '';
-    /* 接続記号（前段から／次段へ） */
-    if (row.from > 0) {
-      const L = TKB_ROWS[row.from / 10 - 1].conn;
-      s += `<circle class="conn-c" cx="${pad - 26}" cy="${midY}" r="9"></circle><text class="conn" x="${pad - 26}" y="${midY + 3.5}" text-anchor="middle">${L}</text>`;
-    }
-    if (row.conn) {
-      const cx = X(row.from + 9) + step * 0.62;
-      s += `<circle class="conn-c" cx="${cx}" cy="${midY}" r="9"></circle><text class="conn" x="${cx}" y="${midY + 3.5}" text-anchor="middle">${row.conn}</text>`;
-    }
-    /* 線路（駅間ごと：複線／単線＋境界の合流・分岐） */
-    for (let i = row.from; i < row.from + 9; i++) {
-      const x0 = X(i), x1 = X(i + 1);
-      if (TKB_SINGLE.has(i)) {
-        s += `<path class="ln" d="M${x0} ${midY} H${x1}"></path>`;
-        if (!TKB_SINGLE.has(i - 1)) s += `<path class="ln" d="M${x0} ${upY} L${x0 + step * 0.38} ${midY} M${x0} ${dnY} L${x0 + step * 0.38} ${midY}"></path>`;
-        if (!TKB_SINGLE.has(i + 1)) s += `<path class="ln" d="M${x1 - step * 0.38} ${midY} L${x1} ${upY} M${x1 - step * 0.38} ${midY} L${x1} ${dnY}"></path>`;
-      } else {
-        s += `<path class="ln" d="M${x0} ${upY} H${x1}"></path><path class="ln" d="M${x0} ${dnY} H${x1}"></path>`;
-        if (TKB_XOVER.has(i)) s += `<path class="ln2" d="M${x0 + step * 0.32} ${upY} L${x0 + step * 0.68} ${dnY}"></path>`;
-      }
-    }
-    /* 天神ターミナル（頭端式3線） */
-    if (row.from === 0) {
-      const bx = X(0) - 24;
-      s += `<line class="buf" x1="${bx}" y1="${upY - 20}" x2="${bx}" y2="${dnY + 20}"></line>`;
-      s += `<path class="ln" d="M${bx} ${upY - 18} H${X(0) + step * 0.3} L${X(0) + step * 0.8} ${upY}"></path>`;
-      s += `<path class="ln" d="M${bx} ${midY} H${X(0) + step * 0.5} L${X(0) + step * 0.85} ${upY} M${X(0) + step * 0.5} ${midY} L${X(0) + step * 0.85} ${dnY}"></path>`;
-      s += `<path class="ln" d="M${bx} ${dnY + 18} H${X(0) + step * 0.3} L${X(0) + step * 0.8} ${dnY}"></path>`;
-      s += `<text class="sub" x="${bx + 2}" y="${upY - 30}">頭端式 3線</text>`;
-    }
-    /* 大牟田ターミナル（シザーズ＋頭端式3線） */
-    if (row.from === 40) {
-      const x = X(49), bx = x + step * 0.62;
-      s += `<path class="ln2" d="M${x - step * 0.72} ${upY} L${x - step * 0.34} ${dnY} M${x - step * 0.72} ${dnY} L${x - step * 0.34} ${upY}"></path>`;
-      s += `<path class="ln" d="M${x} ${upY} H${bx} M${x - step * 0.53} ${midY} H${bx} M${x} ${dnY} H${bx}"></path>`;
-      s += `<line class="buf" x1="${bx}" y1="${upY - 14}" x2="${bx}" y2="${dnY + 14}"></line>`;
-      s += `<text class="sub" x="${bx}" y="${dnY + 36}" text-anchor="end">頭端式 3線</text>`;
-    }
-    /* 駅ごとの配線要素・ドット・コード・駅名 */
-    for (let i = row.from; i <= row.from + 9; i++) {
-      const f = TKB_FEAT[i] || {};
-      const x = X(i);
-      if (f.siding) {
-        s += `<path class="ln2" d="M${x - step * 0.42} ${upY} L${x - step * 0.18} ${upY - 16} H${x + step * 0.18} L${x + step * 0.42} ${upY}"></path>`;
-        s += `<path class="ln2" d="M${x - step * 0.42} ${dnY} L${x - step * 0.18} ${dnY + 16} H${x + step * 0.18} L${x + step * 0.42} ${dnY}"></path>`;
-        if (f.scissors) s += `<path class="ln2" d="M${x - step * 0.66} ${upY} L${x - step * 0.44} ${dnY} M${x - step * 0.66} ${dnY} L${x - step * 0.44} ${upY} M${x + step * 0.44} ${upY} L${x + step * 0.66} ${dnY} M${x + step * 0.44} ${dnY} L${x + step * 0.66} ${upY}"></path>`;
-      }
-      if (f.pass) s += `<path class="ln2" d="M${x - step * 0.42} ${midY} L${x - step * 0.18} ${midY - 16} H${x + step * 0.18} L${x + step * 0.42} ${midY}"></path>`;
-      if (f.passBoth) {
-        s += `<path class="ln2" d="M${x - step * 0.42} ${midY} L${x - step * 0.18} ${midY - 16} H${x + step * 0.18} L${x + step * 0.42} ${midY}"></path>`;
-        s += `<path class="ln2" d="M${x - step * 0.42} ${midY} L${x - step * 0.18} ${midY + 16} H${x + step * 0.18} L${x + step * 0.42} ${midY}"></path>`;
-        s += `<path class="ln2" d="M${x + step * 0.5} ${midY - 16} L${x + step * 0.78} ${midY + 16} M${x + step * 0.5} ${midY + 16} L${x + step * 0.78} ${midY - 16}"></path>`;
-      }
-      if (f.stub) s += `<path class="ln2" d="M${x - step * 0.3} ${midY} L${x - step * 0.08} ${midY - 14} H${x + step * 0.3}"></path><line class="buf" x1="${x + step * 0.3}" y1="${midY - 18}" x2="${x + step * 0.3}" y2="${midY - 10}"></line>`;
-      if (f.junction === 'dz') {
-        s += `<path class="ln2" d="M${x - step * 0.68} ${upY} L${x - step * 0.42} ${dnY} M${x - step * 0.68} ${dnY} L${x - step * 0.42} ${upY} M${x + step * 0.42} ${upY} L${x + step * 0.68} ${dnY} M${x + step * 0.42} ${dnY} L${x + step * 0.68} ${upY}"></path>`;
-        s += `<path class="sdl" d="M${x - step * 1.35} ${upY - 26} H${x - step * 0.3} M${x - step * 1.35} ${upY - 15} H${x - step * 0.3} M${x - step * 0.3} ${upY - 26} L${x - step * 0.05} ${upY} M${x - step * 0.3} ${upY - 15} L${x - step * 0.12} ${upY}"></path>`;
-        s += `<path class="ln2" d="M${x - step * 0.75} ${dnY + 16} H${x + step * 0.75} M${x - step * 0.75} ${dnY + 16} L${x - step * 0.4} ${dnY} M${x + step * 0.75} ${dnY + 16} L${x + step * 0.4} ${dnY}"></path>`;
-        s += `<path class="dzl" d="M${x} ${upY} C ${x + step * 0.2} ${upY - 22}, ${x + step * 0.55} ${upY - 30}, ${x + step * 0.95} ${upY - 34}"></path>`;
-        s += `<text class="dz-t sub" x="${x + step * 0.35}" y="${upY - 38}">太宰府線 ↗</text>`;
-      }
-      if (f.junction === 'ag') {
-        s += `<path class="agl" d="M${x} ${upY} C ${x + step * 0.2} ${upY - 20}, ${x + step * 0.55} ${upY - 27}, ${x + step * 0.95} ${upY - 30}"></path>`;
-        s += `<text class="ag-t sub" x="${x + step * 0.35}" y="${upY - 34}">甘木線 ↗</text>`;
-      }
-      if (f.yard === 'chikushi') {
-        const yb = 56;
-        let fan = '';
-        for (let k = 0; k < 7; k++) { const fx = x - step * 0.35 + k * step * 0.24; fan += `M${fx.toFixed(1)} ${yb} V30 M${(fx - 3).toFixed(1)} 30 H${(fx + 3).toFixed(1)} `; }
-        let diag = '';
-        for (let k = 0; k < 3; k++) diag += `M${(x + step * (0.95 + k * 0.28)).toFixed(1)} ${yb} L${(x + step * (1.35 + k * 0.28)).toFixed(1)} 34 `;
-        s += `<path class="yard" d="M${x - step * 0.5} ${upY} C ${x - step * 0.42} ${upY - 30}, ${x - step * 0.4} ${yb + 14}, ${x - step * 0.38} ${yb} M${x + step * 0.02} ${upY} C ${x + step * 0.1} ${upY - 28}, ${x + step * 0.35} ${yb + 12}, ${x + step * 0.6} ${yb}"></path>`;
-        s += `<path class="yard" d="M${x - step * 0.45} ${yb} H${x + step * 1.85} ${fan}${diag}"></path>`;
-        s += `<text class="dep-t" x="${x + step * 0.6}" y="18" text-anchor="middle">筑紫車両基地</text>`;
-      }
-      if (f.yard === 'yanagawa') {
-        let fan = '';
-        for (let k = 0; k < 6; k++) { const fx = x + step * (0.85 + k * 0.15); fan += `M${fx.toFixed(1)} ${(62 - k * 5).toFixed(1)} L${(fx + step * 0.3).toFixed(1)} ${(34 - k * 5).toFixed(1)} M${(fx + step * 0.3 - 3).toFixed(1)} ${(34 - k * 5).toFixed(1)} H${(fx + step * 0.3 + 3).toFixed(1)} `; }
-        s += `<path class="yard" d="M${x + step * 0.42} ${midY} C ${x + step * 0.6} ${midY - 24}, ${x + step * 0.66} 74, ${x + step * 0.8} 60"></path>`;
-        s += `<path class="yard" d="${fan}"></path>`;
-        s += `<text class="dep-t" x="${x + step * 1.05}" y="18" text-anchor="middle">柳川車両基地</text>`;
-      }
-      const major = CMD_MAJOR.indexOf(MAIN[i]) >= 0;
-      s += `<g><title>${esc(MAIN[i])}（${tCode(i)}）</title><circle class="stn${major ? ' major' : ''}" cx="${x}" cy="${midY}" r="${major ? 4 : 3}"></circle></g>`;
-      s += `<text class="code" x="${x}" y="${dnY + 62}" text-anchor="middle">${tCode(i)}</text>`;
-      s += `<text class="nm${major ? ' major' : ''}" x="${x}" y="${dnY + 75}" text-anchor="middle">${esc(cmdName(MAIN[i]))}</text>`;
-    }
-    /* ---- 列車チップ ---- */
-    const up = [], dn = [], yardChips = [];
-    const inRow = (idx) => idx >= row.from && idx <= row.from + 9;
-    dg.live.forEach((t) => {
-      if (!inRow(t.idx)) return;
-      const it = { no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, kind: 'live', x: X(t.idx) + ((t.frac == null ? 0.4 : t.frac) - 0.5) * step * 0.8, dim: !keep(t.no, t.delay, 'live') };
-      (t.dir === 'up' ? up : dn).push(it);
-    });
-    dg.ghosts.forEach((g) => {
-      const idx = MAIN.indexOf(g.at);
-      if (idx < 0 || !inRow(idx)) return;
-      const it = { no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（在線情報になし・推定）`, x: X(idx) - step * 0.04, dim: !keep(g.no, 0, 'ghost') };
-      (g.dir === 'up' ? up : dn).push(it);
-    });
-    (dg.deads || []).forEach((t) => {
-      if (Math.min(4, Math.floor(t.pos / 10)) !== row.from / 10) return;
-      const it = { no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, x: pad + (t.pos - row.from) * step, dim: !keep(t.no, 0, 'dead') };
-      const yIdx = (t.fromDepot && t.frac <= 0.15) ? MAIN.indexOf(t.from) : (t.toDepot && t.frac >= 0.85) ? MAIN.indexOf(t.to) : -1;
-      if (yIdx === 16 || yIdx === 38) { it.yardX = X(yIdx) + step * 0.55; yardChips.push(it); return; }
-      (t.dir === 'up' ? up : dn).push(it);
-    });
-    tkbPlace(up, W, [0, -1, -2, -3, -4]);
-    tkbPlace(dn, W, [0, 1, 2, 3, 4]);
-    let chips = up.map((it) => tkbChip(it, it.x, upY + it.level * 12)).join('')
-      + dn.map((it) => tkbChip(it, it.x, dnY + it.level * 12)).join('');
-    yardChips.forEach((it) => { chips += tkbChip(it, it.yardX, 40); it.yardX += tkbChipW(tkbLabel(it)) + 8; });
-    return `<div class="cmdb tkb tkb-row" data-row="${row.from}">
-      <svg class="tkb-svg tkb-board-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="配線略図 ${tCode(row.from)}〜${tCode(row.from + 9)}">${s}${chips}</svg>
-    </div>`;
+  /* 画像上の位置：駅index（小数可）→ 原図px。本線は段の駅配列で補間し、
+     段の端では最寄り駅間の傾きで外挿する（接続記号付近まで） */
+  function tkimgInterp(xs, v) {
+    const n = xs.length;
+    if (v <= 0) return xs[0] + v * (xs[1] - xs[0]);
+    if (v >= n - 1) return xs[n - 1] + (v - (n - 1)) * (xs[n - 1] - xs[n - 2]);
+    const i = Math.floor(v), f = v - i;
+    return xs[i] + (xs[i + 1] - xs[i]) * f;
   }
-
-  function tkbBranchRowHTML(b, dg, keep, ros) {
-    const stepB = b.id === 'dz' ? CMD.zoom * 2.2 : CMD.zoom;
-    const pad = TKB_PAD, midY = 78, upB = midY - 13, dnB = midY + 13;
-    const n = b.order.length;
-    const X = (k) => pad + k * stepB;
-    const W = Math.round(pad * 2 + (n - 1) * stepB + 30);
-    const H = 153;
-    const lineCls = b.id === 'dz' ? 'dzl' : 'agl';
-    let s = '';
-    s += `<path class="ln" d="M8 ${upB} H${X(0) - 8} L${X(0)} ${midY} M8 ${dnB} H${X(0) - 8} L${X(0)} ${midY}"></path>`;
-    s += `<path class="${lineCls}" d="M${X(0)} ${midY} H${X(n - 1)}"></path>`;
-    const loops = b.id === 'dz' ? [1] : [4, 6, 8];
-    loops.forEach((k) => {
-      s += `<path class="${lineCls}" d="M${X(k) - stepB * 0.42} ${midY} L${X(k) - stepB * 0.18} ${midY - 13} H${X(k) + stepB * 0.18} L${X(k) + stepB * 0.42} ${midY}"></path>`;
+  function tkimgMain(pos, dir) {
+    const band = Math.max(0, Math.min(4, Math.floor(pos / 10)));
+    const b = TKIMG_BANDS[band];
+    return { x: tkimgInterp(b.xs, pos - band * 10), y: dir === 'up' ? b.up : b.dn, zone: 'm' + band + (dir === 'up' ? 'u' : 'd'), side: dir === 'up' ? 'up' : 'dn' };
+  }
+  function tkimgBranch(id, pos, upSide) {
+    const pts = TKIMG_BRANCH[id];
+    const n = pts.length;
+    let x, y;
+    if (pos <= 0) { x = pts[0].x + pos * (pts[1].x - pts[0].x); y = pts[0].y + pos * (pts[1].y - pts[0].y); }
+    else if (pos >= n - 1) { x = pts[n - 1].x + (pos - (n - 1)) * (pts[n - 1].x - pts[n - 2].x); y = pts[n - 1].y + (pos - (n - 1)) * (pts[n - 1].y - pts[n - 2].y); }
+    else { const i = Math.floor(pos), f = pos - i; x = pts[i].x + (pts[i + 1].x - pts[i].x) * f; y = pts[i].y + (pts[i + 1].y - pts[i].y) * f; }
+    return { x, y: y + (upSide ? -13 : 13), zone: 'b' + id + (upSide ? 'u' : 'd'), side: upSide ? 'up' : 'dn' };
+  }
+  /* 支線の上側は隣の段（貝塚線・太宰府線タイトル等）に侵入しないよう段数を絞る */
+  const TKIMG_MAXLV = { bagu: 1, bdzu: 2 };
+  /* 同じ帯（zone）の中でチップを段ずらしし、画像内にクランプする（原図pxで計算） */
+  function tkimgPlace(arr) {
+    const sign = arr[0].side === 'up' ? -1 : 1;
+    const maxLv = TKIMG_MAXLV[arr[0].zone] != null ? TKIMG_MAXLV[arr[0].zone] : 3;
+    arr.forEach((it) => { it.pw = tkbChipW(tkbLabel(it)) + 6; });
+    const placed = [];
+    arr.slice().sort((a, b) => a.px0 - b.px0).forEach((it) => {
+      let lv = maxLv;
+      for (let L = 0; L <= maxLv; L++) {
+        if (!placed.some((p) => p.level === L && Math.abs(p.px0 - it.px0) < (p.pw + it.pw) / 2 + 4)) { lv = L; break; }
+      }
+      it.level = lv;
+      it.px = Math.max(it.pw / 2 + 2, Math.min(TKIMG_W - it.pw / 2 - 2, it.px0));
+      it.py = Math.max(13, Math.min(TKIMG_H - 13, it.py0 + sign * lv * 23));
+      placed.push(it);
     });
-    const bx = X(n - 1) + stepB * 0.42;
-    s += `<path class="${lineCls}" d="M${X(n - 1) - stepB * 0.42} ${midY} L${X(n - 1) - stepB * 0.2} ${midY - 9} H${bx} M${X(n - 1) - stepB * 0.42} ${midY} L${X(n - 1) - stepB * 0.2} ${midY + 9} H${bx}"></path>`;
-    s += `<line class="buf" x1="${bx}" y1="${midY - 13}" x2="${bx}" y2="${midY + 13}"></line>`;
-    s += `<text class="${b.id === 'dz' ? 'dz-t' : 'ag-t'} txb" x="8" y="18">${b.name}（単線）</text>`;
-    b.order.forEach((nm, k) => {
-      const major = k === 0 || k === n - 1;
-      s += `<g><title>${esc(nm)}（${b.code[nm] || ''}）</title><circle class="stn ${b.id === 'dz' ? 'dz-stn' : 'ag-stn'}${major ? ' major' : ''}" cx="${X(k)}" cy="${midY}" r="${major ? 4 : 3}"></circle></g>`;
-      s += `<text class="code" x="${X(k)}" y="${midY + 55}" text-anchor="middle">${b.code[nm] || ''}</text>`;
-      s += `<text class="nm${major ? ' major' : ''}" x="${X(k)}" y="${midY + 68}" text-anchor="middle">${esc(cmdName(nm))}</text>`;
-    });
-    const brt = cmdBranchTrains(dg.dt)[b.id] || [];
-    const up = [], dn = [];
-    brt.forEach((t) => {
-      const it = { no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: `${b.name}内（推定）`, x: pad + t.pos * stepB, dim: CMD.filter === 'all' ? false : CMD.filter === 'roster' ? !ros.has(t.no) : true };
-      (b.order.indexOf(t.dest) === 0 ? up : dn).push(it);
-    });
-    (dg.onBranch || []).forEach((g) => {
-      const k = b.order.indexOf(g.at);
-      if (k < 0) return;
-      const it = { no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（支線内・推定）`, x: X(k), dim: !keep(g.no, 0, 'ghost') };
-      (b.order.indexOf(g.dest) > 0 ? dn : up).push(it);
-    });
-    tkbPlace(up, W, [0, -1, -2]);
-    tkbPlace(dn, W, [0, 1, 2]);
-    const chips = up.map((it) => tkbChip(it, it.x, upB + it.level * 12)).join('')
-      + dn.map((it) => tkbChip(it, it.x, dnB + it.level * 12)).join('');
-    return `<div class="cmdb tkb tkb-row" data-row="br-${b.id}">
-      <svg class="tkb-svg tkb-board-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${b.name}配線略図">${s}${chips}</svg>
-    </div>`;
+  }
+  function tkimgChipHTML(it) {
+    const label = tkbLabel(it);
+    const cls = ['tkb-chip', 'img-chip', typeClass(it.type), it.kind !== 'live' ? it.kind : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
+    const carTxt = it.cars ? ` ・ 車 ${it.cars}` : '';
+    const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${it.kind === 'dead' ? '' : (it.delay || 0) ? '・' + it.delay + '分遅れ' : '・定時'}${carTxt}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : it.kind === 'dead' ? '（回送・乗務データからの推定）' : ''}`;
+    return `<button class="${cls}" data-cmd-train="${esc(it.no)}" data-x="${it.px.toFixed(0)}" data-y="${it.py.toFixed(0)}" data-w="${it.pw}" style="left:${(it.px / TKIMG_W * 100).toFixed(2)}%;top:${(it.py / TKIMG_H * 100).toFixed(2)}%" title="${esc(title)}">${esc(label)}</button>`;
   }
 
   function cmdBoardHTML(dg) {
     const ros = rosterNos().set;
     const keep = tkbKeep(ros, CMD.filter);
-    const rows = TKB_ROWS.map((r) => tkbMainRowHTML(r, dg, keep, ros)).join('')
-      + CMD_BRANCH.map((b) => tkbBranchRowHTML(b, dg, keep, ros)).join('');
+    const items = [];
+    dg.live.forEach((t) => {
+      const pos = t.idx + ((t.frac == null ? 0.4 : t.frac) - 0.5) * 0.8;
+      const p = tkimgMain(pos, t.dir);
+      items.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, kind: 'live', dim: !keep(t.no, t.delay, 'live'), px0: p.x, py0: p.y, zone: p.zone, side: p.side });
+    });
+    dg.ghosts.forEach((g) => {
+      const idx = MAIN.indexOf(g.at);
+      if (idx < 0) return;
+      const p = tkimgMain(idx, g.dir);
+      items.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（在線情報になし・推定）`, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: !keep(g.no, 0, 'ghost') });
+    });
+    (dg.deads || []).forEach((t) => {
+      const yIdx = (t.fromDepot && t.frac <= 0.15) ? MAIN.indexOf(t.from) : (t.toDepot && t.frac >= 0.85) ? MAIN.indexOf(t.to) : -1;
+      if (TKIMG_YARD[yIdx]) {
+        const yd = TKIMG_YARD[yIdx];
+        items.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, px0: yd.x, py0: yd.y, zone: 'yard' + yIdx, side: 'dn', dim: !keep(t.no, 0, 'dead') });
+        return;
+      }
+      const p = tkimgMain(t.pos, t.dir);
+      items.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: !keep(t.no, 0, 'dead') });
+    });
+    const brt = cmdBranchTrains(dg.dt);
+    CMD_BRANCH.forEach((b) => {
+      (brt[b.id] || []).forEach((t) => {
+        const upSide = b.order.indexOf(t.dest) === 0;
+        const p = tkimgBranch(b.id, t.pos, upSide);
+        items.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: `${b.name}内（推定）`, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: CMD.filter === 'all' ? false : CMD.filter === 'roster' ? !ros.has(t.no) : true });
+      });
+    });
+    (dg.onBranch || []).forEach((g) => {
+      const b = CMD_BRANCH.find((x) => x.order.indexOf(g.at) >= 0);
+      if (!b) return;
+      const upSide = !(b.order.indexOf(g.dest) > 0);
+      const p = tkimgBranch(b.id, b.order.indexOf(g.at), upSide);
+      items.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（支線内・推定）`, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: !keep(g.no, 0, 'ghost') });
+    });
+    const zones = {};
+    items.forEach((it) => { (zones[it.zone] = zones[it.zone] || []).push(it); });
+    Object.keys(zones).forEach((k) => tkimgPlace(zones[k]));
+    const chips = items.map(tkimgChipHTML).join('');
     const jumps = CMD_MAJOR.map((n) => `<button class="cjb" data-cmd-jump="${MAIN.indexOf(n)}">${esc(cmdName(n))}</button>`).join('');
     return `<div class="cmd-bhead">
-        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">実配線略図に沿った段組み表示／在線は駅ブロック単位・番線は特定しない</span>
+        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">実物の配線略図そのものに在線を重ねて表示／在線は駅ブロック単位・番線は特定しない（貝塚線は在線対象外）</span>
         <span class="cmd-zoom"><button data-cmd-zoom="-"${CMD.zoom <= CMD_ZOOM_STEPS[0] ? ' disabled' : ''}>−</button><button data-cmd-zoom="+"${CMD.zoom >= CMD_ZOOM_STEPS[CMD_ZOOM_STEPS.length - 1] ? ' disabled' : ''}>＋</button></span>
       </div>
       <div class="cmd-jump">${jumps}</div>
-      ${rows}`;
+      <div class="cmdb tkb-img" id="cmdImgBox">
+        <div class="tkb-img-inner" style="width:${CMD.zoom}%">
+          <div class="tkb-img-wrap">
+            <img class="tkb-img-map" src="assets/track-map.jpg" alt="西鉄 配線略図（raildiag 図番号1285・紺狐）" draggable="false">
+            ${chips}
+          </div>
+        </div>
+      </div>`;
   }
+
 
   /* 駅詳細：西鉄二日市（4面5線・のりば1〜7）
      番線割当（推定）：太宰府直通の下り＝2番線（4番のりば・下り副本線）／太宰府からの上り直通＝1番線
@@ -1469,7 +1379,7 @@ ${chips}
     return `${cmdFutsukaichiHTML(dg)}
       ${cmdTenjinHTML(dg)}
       <p class="cmd-foot">番線レベルの配置は推定です：在線データは駅ブロック単位のため、西鉄二日市の番線は種別・行先と番線ルール（太宰府直通は4番線＝下り副本線／太宰府線シャトルは1番のりば／追い越し時は追い越される列車が副本線・追い越す列車が主本線）にもとづいて置いています。西鉄福岡（天神）には行き先・種別ごとの専用ホームがないため、番線を特定せず発着レベルで表示しています。実際の番線は駅の案内・指令の指示でご確認ください。</p>
-      <p class="cmd-foot">配線略図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を参考に自作した略図です（縮尺・分岐器の正確な位置は実物と異なります）。駅の線数・待避線・単線区間は各駅の公開情報とも突き合わせています。</p>`;
+      <p class="cmd-foot">配線図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）をそのまま使用しています。列車の位置は駅ブロック単位で図の線路上に重ねて表示しており、番線レベルの特定はしません。貝塚線は在線情報の対象外のため列車は表示されません。</p>`;
   }
 
   function cmdBranchHTML(dt) {
@@ -1624,13 +1534,24 @@ ${chips}
     el.textContent = left + '秒';
   }
   function cmdScrollToIdx(idx) {
-    const rowFrom = Math.max(0, Math.min(40, Math.floor(idx / 10) * 10));
-    const box = document.querySelector(`.cmdb.tkb-row[data-row="${rowFrom}"]`);
+    const box = document.querySelector('#cmdImgBox');
     if (!box) return;
-    const x = TKB_PAD + (idx - rowFrom) * CMD.zoom;
-    box.scrollLeft = Math.max(0, x - box.clientWidth / 2);
-    CMD.scroll = box.scrollLeft;
-    if (box.scrollIntoView) { try { box.scrollIntoView({ block: 'nearest' }); } catch (e) { /* noop */ } }
+    const band = Math.max(0, Math.min(4, Math.floor(idx / 10)));
+    const b = TKIMG_BANDS[band];
+    const fx = tkimgInterp(b.xs, idx - band * 10) / TKIMG_W;
+    const fy = ((b.up + b.dn) / 2) / TKIMG_H;
+    const inner = box.querySelector('.tkb-img-inner');
+    const iw = inner ? inner.offsetWidth : 0;
+    if (iw > 0) {
+      box.scrollLeft = Math.max(0, fx * iw - box.clientWidth / 2);
+      CMD.scroll = box.scrollLeft;
+    }
+    const wrap = box.querySelector('.tkb-img-wrap');
+    if (wrap && wrap.getBoundingClientRect) {
+      const r = wrap.getBoundingClientRect();
+      const y = r.top + (window.scrollY || 0) + fy * r.height - (window.innerHeight || 0) / 2;
+      if (isFinite(y)) window.scrollTo(0, Math.max(0, y));
+    }
   }
   /* 列車の詳細（指令室から開く） */
   function openCmdTrain(no) {
