@@ -742,6 +742,7 @@
      ・「停車中／駅間走行中」＝公式の位置行と定刻（＋遅延）の突き合わせによる推定
      ・在線情報に無い列車＝定刻上は運転中なら「未在線（運休・見合わせ等の可能性）」として推定表示
      ・太宰府線・甘木線は公式の在線情報の対象外（分岐駅の情報と時刻表から推定）
+     ・回送列車も公式の対象外のため、乗務データ（行路 legs）の時刻から位置を推定する
      公式に無い値を埋めることはしない。推定は画面上でも「推定」と明示する。
      ========================================================= */
   const CMD = {
@@ -924,20 +925,94 @@
     return res;
   }
 
+  /* 回送列車の推定（在線情報に載らないため、乗務データ＝行路 legs から導出する）
+     識別根拠：leg の列番について D.trains の種別が「回送／回送ワ」であること。
+     系統文字列に「回」の表記は無く、基地発着 leg でも営業列車（入出庫作業つき）は
+     回送運転そのものではないため、種別を唯一の根拠にする。
+     ・単独列番の leg：leg の bt/at と発着（bst/ast・基地種別）がそのまま回送区間
+       （trainRec の dep/arr と一致することをデータで確認済み）。
+     ・複数列番の leg（営業列車から続けて乗務する等）：回送列車自身の
+       trainRec（始発・終着・時刻）を区間として切り出す。
+     位置は発駅→着駅を MAIN の駅順に時刻で線形補間する（支線推定と同じ考え方）。
+     運行時に APP_DATA から導出するので、legs が補完されれば対象は自動で増える。 */
+  const CMD_DEPOT_NAME = {};
+  (D.depots || []).forEach((x) => { CMD_DEPOT_NAME[x.station] = x.name; });
+  const CMD_DEPOT_SHORT = { '筑紫車両基地': '筑紫基地', '花畑車両基地': '花畑基地', '柳川車両基地': '柳川基地' };
+  const cmdStnIdx = (name) => {
+    if (!name) return -1;
+    const n = String(name).replace(/（/g, '(').replace(/）/g, ')').replace(/駅$/, '');
+    if (IDX[n] != null) return IDX[n];
+    const c = canon(n);
+    if (IDX[c] != null) return IDX[c];
+    const s = n.replace(/^西鉄/, '');
+    if (IDX[s] != null) return IDX[s];
+    return -1;
+  };
+  function cmdDeadheads(dt) {
+    const now = nowMin();
+    const out = [];
+    const seen = new Set();
+    for (const p of D.patterns) {
+      if (p.dayType !== dt) continue;
+      for (const d of p.days) {
+        for (const lg of (d.legs || [])) {
+          for (const no of lg.t) {
+            if (seen.has(no)) continue;
+            const r = trainRec(dt, no);
+            if (!r || !/回送/.test(r.type || '')) continue;
+            seen.add(no);
+            if (POS.trains[no]) continue;            // 在線フィードに同列番があればフィード優先
+            let from, to, bt, at, fromDepot = false, toDepot = false;
+            if (lg.t.length === 1) {
+              bt = lg.bt; at = lg.at;
+              from = lg.bst || lg.bn || ''; to = lg.ast || lg.an || '';
+              fromDepot = lg.btype === 'depot'; toDepot = lg.atype === 'depot';
+            } else {
+              bt = toMin(r.dep); at = toMin(r.arr);
+              from = r.from || ''; to = r.to || '';
+              const fi = cmdStnIdx(from), ti = cmdStnIdx(to);
+              if (lg.btype === 'depot' && fi >= 0 && cmdStnIdx(lg.bst || lg.bn || '') === fi) fromDepot = true;
+              if (lg.atype === 'depot' && ti >= 0 && cmdStnIdx(lg.ast || lg.an || '') === ti) toDepot = true;
+            }
+            if (bt == null || at == null || at <= bt) continue;
+            if (now < bt || now >= at) continue;
+            const i0 = cmdStnIdx(from), i1 = cmdStnIdx(to);
+            if (i0 < 0 || i1 < 0 || i0 === i1) continue;
+            const frac = (now - bt) / (at - bt);
+            const pos = i0 + (i1 - i0) * frac;
+            const fName = MAIN[i0], tName = MAIN[i1];
+            const fDisp = fromDepot ? (CMD_DEPOT_SHORT[CMD_DEPOT_NAME[fName]] || CMD_DEPOT_NAME[fName] || fName) : fName;
+            const tDisp = toDepot ? (CMD_DEPOT_SHORT[CMD_DEPOT_NAME[tName]] || CMD_DEPOT_NAME[tName] || tName) : tName;
+            out.push({
+              no, type: r.type, from: fName, to: tName, bt, at, frac, pos,
+              dir: i1 > i0 ? 'down' : 'up',
+              fromDepot, toDepot,
+              dest: tDisp,
+              at: MAIN[Math.max(0, Math.min(MAIN.length - 1, Math.round(pos)))],
+              where: `${fDisp} → ${tDisp} 回送中（推定）`,
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /* 指令室の集計（1回の描画で使い回す） */
   let CMD_DG = { key: '', val: null };
   function cmdDigest() {
     const dt = todayType();
-    const key = [POS.fetchedAt, POS.status, POS.fileTime, STOPS.status, dt, ES.status, ES.fetchedAt].join('|');
+    const key = [POS.fetchedAt, POS.status, POS.fileTime, STOPS.status, dt, ES.status, ES.fetchedAt, Math.floor(Date.now() / 60000)].join('|');
     if (CMD_DG.key === key && CMD_DG.val) return CMD_DG.val;
     const live = Object.keys(POS.trains).map(cmdInfo).filter(Boolean);
     const ghosts = cmdGhosts(dt);
+    const deads = cmdDeadheads(dt);
     const lost = ghosts.filter((g) => !g.branch);
     const onBranch = ghosts.filter((g) => g.branch);
     let delayed = 0, maxDelay = 0;
     live.forEach((t) => { if (t.delay > 0) { delayed++; if (t.delay > maxDelay) maxDelay = t.delay; } });
     const stale = POS.status === 'ready' && Date.now() - POS.fetchedAt > 3 * 60 * 1000;
-    const val = { dt, live, ghosts, lost, onBranch, delayed, maxDelay, stale, running: live.length };
+    const val = { dt, live, ghosts, deads, lost, onBranch, delayed, maxDelay, stale, running: live.length };
     CMD_DG = { key, val };
     return val;
   }
@@ -1004,18 +1079,149 @@
         <i class="tick"></i><b class="tc">${esc(codes[i] || '')}</b><span class="nm">${esc(cmdName(n))}</span>${dep ? `<em class="dep">${esc(dep)}</em>` : ''}</div>`;
     }).join('');
   }
+  /* ---------- 配線図ボード（v29） ----------
+     全線略図SVG＋西鉄二日市・西鉄福岡(天神)の駅詳細配線図。
+     配線は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を参考に自作した略図。
+     在線データは駅ブロック単位までしか分からないため、番線レベルの配置は
+     種別・行先と番線ルール（二日市：太宰府直通は4番線＝下り副本線／追い越し時は
+     追い越される列車が副本線・追い越す列車が主本線、天神：種別で固定）にもとづく推定。
+     指令ビュー内にもその旨を注記する。 */
+  const TKB = { upY: 150, dnY: 176, H: 322 };
+  const tkbLabel = (it) => {
+    const ts = typeShort(it.type);
+    const tp = (ts === '特急' || ts === '急行' || ts === 'NL' || ts === '回送') ? ts : '';
+    const ds = it.dest ? cmdName(it.dest) + '行' : '';
+    const dl = (it.delay || 0) > 0 ? ` +${it.delay}` : '';
+    return [it.no, tp, ds].filter(Boolean).join(' ') + dl + (it.kind === 'ghost' ? ' ?' : '');
+  };
+  const tkbChipW = (label) => {
+    let w = 14;
+    for (const ch of label) w += /[ -~]/.test(ch) ? 6.4 : 11;
+    return Math.max(46, Math.ceil(w));
+  };
+  function tkbChip(it, x, y, sub) {
+    const label = tkbLabel(it);
+    const w = tkbChipW(label);
+    const cls = ['tkb-chip', typeClass(it.type), it.kind !== 'live' ? it.kind : '', it.dim ? 'dim' : '', CMD.sel === it.no ? 'sel' : ''].filter(Boolean).join(' ');
+    const carTxt = it.cars ? ` ・ 車 ${it.cars}` : '';
+    const title = `${it.no} ${it.type || ''}${it.dest ? ' ' + it.dest + '行' : ''}　${it.where || ''}${it.kind === 'dead' ? '' : (it.delay || 0) ? '・' + it.delay + '分遅れ' : '・定時'}${carTxt}${it.kind === 'ghost' ? '（在線情報になし・推定）' : it.kind === 'branch' ? '（支線内・推定）' : it.kind === 'dead' ? '（回送・乗務データからの推定）' : ''}${sub ? '（番線は推定）' : ''}`;
+    return `<g class="${cls}" data-cmd-train="${esc(it.no)}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+      <title>${esc(title)}</title>
+      <rect class="body" x="${(-w / 2).toFixed(1)}" y="-8.5" width="${w}" height="17" rx="4"></rect>
+      ${it.delay > 0 ? `<rect class="ring" x="${(-w / 2).toFixed(1)}" y="-8.5" width="${w}" height="17" rx="4"></rect>` : ''}
+      <text y="4">${esc(label)}</text>
+    </g>`;
+  }
+  /* 同じ線の上で近いチップ同士を上下にずらす（level: 0,-1,1,-2,2） */
+  function tkbStack(items) {
+    const placed = [];
+    items.slice().sort((a, b) => a.x - b.x).forEach((it) => {
+      it.w = tkbChipW(tkbLabel(it));
+      let level = 2;
+      for (const L of [0, -1, 1, -2, 2]) {
+        if (!placed.some((p) => p.level === L && Math.abs(p.x - it.x) < (p.w + it.w) / 2 + 3)) { level = L; break; }
+      }
+      it.level = level;
+      placed.push(it);
+    });
+  }
+  /* 詳細図用：1つの番線にチップを横並びにする */
+  function tkbRow(items, cx, y) {
+    if (!items.length) return '';
+    const ws = items.map((it) => tkbChipW(tkbLabel(it)));
+    const total = ws.reduce((a, b) => a + b, 0) + 8 * (items.length - 1);
+    let x = cx - total / 2;
+    return items.map((it, i) => { const c = x + ws[i] / 2; x += ws[i] + 8; return tkbChip(it, c, y, true); }).join('');
+  }
+  const tkbKeep = (ros, filt) => (no, delay, kind) =>
+    filt === 'all' || (filt === 'delay' && delay > 0) || (filt === 'lost' && kind === 'ghost') || (filt === 'roster' && ros.has(no));
+
   function cmdBoardHTML(dg) {
     const step = CMD.zoom;
     const pad = Math.max(30, Math.round(step * 0.55));
+    const X = (i) => pad + i * step;
     const W = Math.round(pad * 2 + (MAIN.length - 1) * step);
+    const { upY, dnY, H } = TKB;
+    const midY = (upY + dnY) / 2;
     const ros = rosterNos().set;
     const filt = CMD.filter;
-    const keep = (no, delay, kind) => filt === 'all' || (filt === 'delay' && delay > 0) || (filt === 'lost' && kind === 'ghost') || (filt === 'roster' && ros.has(no));
+    const keep = tkbKeep(ros, filt);
+    const iF = MAIN.indexOf('西鉄二日市'), iC = MAIN.indexOf('筑紫'), iM = MAIN.indexOf('宮の陣');
+    const qPt = (p0, c, p1, t) => [
+      (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * c[0] + t * t * p1[0],
+      (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * c[1] + t * t * p1[1],
+    ];
+    /* 太宰府線（単線）：二日市の上り側余分線から北へ分岐 */
+    const dzP0 = [X(iF) + step * 0.2, upY - 26], dzC = [X(iF) + step * 1.3, upY - 32], dzP1 = [X(iF) + step * 2.6, 52];
+    /* 甘木線（単線）：宮の陣から南へ分岐 */
+    const agP0 = [X(iM), dnY], agC = [X(iM) + step * 1.5, dnY + 10], agP1 = [X(iM) + step * 2.8, 268];
+    const [gjX, gjY] = qPt(dzP0, dzC, dzP1, 0.5);
+
+    /* ---- 静的配線 ---- */
+    let s = '';
+    /* 天神ターミナル（頭端式3線） */
+    s += `<line class="buf" x1="10" y1="${upY - 34}" x2="10" y2="${dnY + 10}"></line>`;
+    s += `<path class="ln" d="M12 ${upY - 26} H${X(0) + step * 0.5} L${X(0) + step * 1.4} ${upY}"></path>`;
+    s += `<path class="ln" d="M12 ${upY} H${W - 64}"></path>`;
+    s += `<path class="ln" d="M12 ${dnY} H${W - 64}"></path>`;
+    s += `<text class="txb" x="14" y="40">西鉄福岡(天神) T01</text>`;
+    s += `<text class="sub" x="14" y="58">頭端式 3線（1:急行 2:普通 3:特急・急行）</text>`;
+    s += `<text class="sub" x="10" y="${upY - 40}">上り線（天神方面）</text>`;
+    /* 大牟田ターミナル */
+    s += `<path class="dash" d="M${X(MAIN.length - 1) + 8} ${midY} H${W - 20}"></path>`;
+    s += `<path class="ln2" d="M${W - 64} ${upY} L${W - 14} ${midY} M${W - 64} ${dnY} L${W - 14} ${midY}"></path>`;
+    s += `<line class="buf" x1="${W - 12}" y1="${upY - 12}" x2="${W - 12}" y2="${dnY + 12}"></line>`;
+    s += `<text class="txb" x="${W - 14}" y="40" text-anchor="end">大牟田 T50</text>`;
+    s += `<text class="sub" x="${W - 14}" y="58" text-anchor="end">終端・引上げ線</text>`;
+    s += `<text class="sub" x="${W - 10}" y="${dnY + 32}" text-anchor="end">下り線（大牟田方面）</text>`;
+    /* 渡り線（春日原・久留米・柳川） */
+    for (const nm of ['春日原', '西鉄久留米', '西鉄柳川']) {
+      const cx = X(MAIN.indexOf(nm));
+      s += `<path class="ln2" d="M${cx - 13} ${upY} L${cx + 13} ${dnY} M${cx + 13} ${upY} L${cx - 13} ${dnY}"></path>`;
+    }
+    /* 二日市：上下の余分線（詳細は駅詳細図） */
+    s += `<path class="ln" d="M${X(iF) - step * 0.8} ${upY - 26} H${X(iF) + step * 0.8}"></path>`;
+    s += `<path class="ln2" d="M${X(iF) - step * 0.8} ${upY - 26} L${X(iF) - step * 0.35} ${upY} M${X(iF) + step * 0.8} ${upY - 26} L${X(iF) + step * 0.35} ${upY}"></path>`;
+    s += `<path class="ln" d="M${X(iF) - step * 0.8} ${dnY + 22} H${X(iF) + step * 0.8}"></path>`;
+    s += `<path class="ln2" d="M${X(iF) - step * 0.8} ${dnY + 22} L${X(iF) - step * 0.35} ${dnY} M${X(iF) + step * 0.8} ${dnY + 22} L${X(iF) + step * 0.35} ${dnY}"></path>`;
+    /* 太宰府線・甘木線 */
+    s += `<path class="dzl" d="M${dzP0[0]} ${dzP0[1]} Q${dzC[0]} ${dzC[1]} ${dzP1[0]} ${dzP1[1]}"></path>`;
+    s += `<circle class="stn dz-stn" cx="${gjX.toFixed(1)}" cy="${gjY.toFixed(1)}" r="3.5"></circle>`;
+    s += `<circle class="stn dz-stn" cx="${dzP1[0]}" cy="${dzP1[1]}" r="4"></circle>`;
+    s += `<text class="dz-t sub" x="${(gjX - 8).toFixed(1)}" y="${(gjY - 8).toFixed(1)}" text-anchor="end">西鉄五条 D01</text>`;
+    s += `<text class="dz-t txb" x="${dzP1[0] + 9}" y="${dzP1[1] + 4}">太宰府 D02</text>`;
+    s += `<text class="dz-t sub" x="${X(iF) + step * 0.9}" y="34">太宰府線（単線）</text>`;
+    s += `<path class="agl" d="M${agP0[0]} ${agP0[1]} Q${agC[0]} ${agC[1]} ${agP1[0]} ${agP1[1]}"></path>`;
+    for (let k = 1; k < 11; k++) {
+      const [ax, ay] = qPt(agP0, agC, agP1, k / 11);
+      s += `<circle class="stn ag-stn" cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="2.2"></circle>`;
+    }
+    s += `<circle class="stn ag-stn" cx="${agP1[0]}" cy="${agP1[1]}" r="4"></circle>`;
+    s += `<text class="ag-t txb" x="${agP1[0] + 9}" y="${agP1[1] + 4}">甘木 A01</text>`;
+    s += `<text class="ag-t sub" x="${X(iM) + step * 1.05}" y="228">甘木線（単線・交換駅あり）</text>`;
+    /* 車両基地 */
+    for (const [nm, label] of [['筑紫', '筑紫車両基地'], ['西鉄柳川', '柳川車両基地']]) {
+      const cx = X(MAIN.indexOf(nm));
+      s += `<path class="sdl" d="M${cx} ${dnY} L${cx + 18} 234"></path>`;
+      s += `<rect class="depot" x="${cx - 54}" y="234" width="124" height="20" rx="4"></rect>`;
+      s += `<text class="dep-t" x="${cx + 8}" y="248" text-anchor="middle">${label}</text>`;
+    }
+    /* 駅ドット・コード・主要駅名 */
+    MAIN.forEach((n, i) => {
+      const major = CMD_MAJOR.indexOf(n) >= 0;
+      s += `<g><title>${esc(n)}（${tCode(i)}）</title><circle class="stn${major ? ' major' : ''}" cx="${X(i)}" cy="${midY}" r="${major ? 4 : 3}"></circle></g>`;
+      s += `<text class="code" x="${X(i)}" y="${dnY + 15}" text-anchor="middle">${tCode(i)}</text>`;
+      if (major && n !== '福岡(天神)' && n !== '大牟田')
+        s += `<text class="mj" x="${X(i)}" y="212" text-anchor="middle">${esc(cmdName(n))}</text>`;
+    });
+
+    /* ---- 列車チップ（線路の上） ---- */
     const up = [], dn = [];
     dg.live.forEach((t) => {
       const it = {
-        no: t.no, idx: t.idx, frac: t.frac, col: t.col, delay: t.delay, type: t.type, dest: t.dest,
-        where: t.where, cars: t.cars, kind: 'live', dim: !keep(t.no, t.delay, 'live'),
+        no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars,
+        kind: 'live', x: X(t.idx) + ((t.frac == null ? 0.4 : t.frac) - 0.5) * step * 0.8,
+        dim: !keep(t.no, t.delay, 'live'),
       };
       (t.dir === 'up' ? up : dn).push(it);
     });
@@ -1023,26 +1229,179 @@
       const idx = MAIN.indexOf(g.at);
       if (idx < 0) return;
       const it = {
-        no: g.no, idx, frac: 0.45, col: g.dir === 'down' ? 3 : 1, delay: 0, type: g.type, dest: g.dest,
-        where: `${g.at} 付近（在線情報になし・推定）`, kind: 'ghost', dim: !keep(g.no, 0, 'ghost'),
+        no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost',
+        where: `${g.at} 付近（在線情報になし・推定）`,
+        x: X(idx) + (0.45 - 0.5) * step * 0.8, dim: !keep(g.no, 0, 'ghost'),
       };
       (g.dir === 'up' ? up : dn).push(it);
     });
-    const codes = MAIN.map((_, i) => tCode(i));
+    /* 回送（乗務データから推定）：基地が端点で、発着の前後は引込線の位置に出す */
+    const depotPt = { '筑紫': [X(iC) + 8, 244], '西鉄柳川': [X(MAIN.indexOf('西鉄柳川')) + 8, 244] };
+    const deadDepot = [];
+    (dg.deads || []).forEach((t) => {
+      const it = {
+        no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead',
+        where: t.where, x: pad + t.pos * step, dim: !keep(t.no, 0, 'dead'),
+      };
+      const pt = (t.fromDepot && t.frac <= 0.15 && depotPt[t.from]) ? depotPt[t.from]
+        : (t.toDepot && t.frac >= 0.85 && depotPt[t.to]) ? depotPt[t.to] : null;
+      if (pt) { it.pt = pt; deadDepot.push(it); }
+      else (t.dir === 'up' ? up : dn).push(it);
+    });
+    tkbStack(up); tkbStack(dn);
+    let chips = up.map((it) => tkbChip(it, it.x, upY + it.level * 12)).join('')
+      + dn.map((it) => tkbChip(it, it.x, dnY + it.level * 12)).join('');
+    chips += deadDepot.map((it) => tkbChip(it, it.pt[0], it.pt[1])).join('');
+    /* 支線の列車（時刻表から推定・cmdBranchTrains） */
+    const brt = cmdBranchTrains(dg.dt);
+    const brDim = (no) => (filt === 'all' ? false : filt === 'roster' ? !ros.has(no) : true);
+    brt.dz.forEach((t) => {
+      const [bx, by] = qPt(dzP0, dzC, dzP1, Math.max(0, Math.min(1, t.pos / 2)));
+      chips += tkbChip({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: '太宰府線内（推定）', dim: brDim(t.no) }, bx, by - 15);
+    });
+    brt.ag.forEach((t) => {
+      const [bx, by] = qPt(agP0, agC, agP1, Math.max(0, Math.min(1, t.pos / 11)));
+      chips += tkbChip({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: '甘木線内（推定）', dim: brDim(t.no) }, bx, by - 15);
+    });
+
     const jumps = CMD_MAJOR.map((n) => `<button class="cjb" data-cmd-jump="${MAIN.indexOf(n)}">${esc(cmdName(n))}</button>`).join('');
     return `<div class="cmd-bhead">
-        <b>天神大牟田線</b><span class="cmd-note">${MAIN.length}駅・公式の在線位置</span>
+        <b>天神大牟田線・配線図</b><span class="cmd-note">${MAIN.length}駅＋太宰府線・甘木線／公式の在線位置＋回送は乗務データから推定</span>
         <span class="cmd-zoom"><button data-cmd-zoom="-"${CMD.zoom <= CMD_ZOOM_STEPS[0] ? ' disabled' : ''}>−</button><button data-cmd-zoom="+"${CMD.zoom >= CMD_ZOOM_STEPS[CMD_ZOOM_STEPS.length - 1] ? ' disabled' : ''}>＋</button></span>
       </div>
       <div class="cmd-jump">${jumps}</div>
-      <div class="cmdb">
-        <div class="cmdb-cap cap-up">▲ 上り（西鉄福岡(天神) 方面）</div>
-        <div class="cmdb-lanes lane-up">${cmdLanesHTML(up, step, pad)}</div>
-        <div class="cmdb-rail" style="width:${W}px"><i class="rail-line"></i>${cmdStationsHTML(MAIN, codes, step, pad)}</div>
-        <div class="cmdb-lanes lane-down">${cmdLanesHTML(dn, step, pad)}</div>
-        <div class="cmdb-cap cap-down">▼ 下り（大牟田 方面）</div>
+      <div class="cmdb tkb">
+        <svg class="tkb-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="西鉄全線配線略図ボード">${s}${chips}</svg>
       </div>`;
   }
+
+  /* 駅詳細：西鉄二日市（4面5線・のりば1〜7）
+     番線割当（推定）：太宰府直通の下り＝2番線（4番のりば・下り副本線）／太宰府からの上り直通＝1番線
+     下り 特急・急行＝3番線（主本線）・普通＝2番線（副本線）／上り 特急・急行＝4番線（主本線）・普通＝5番線（副本線） */
+  function cmdFutsukaichiHTML(dg) {
+    const stn = '西鉄二日市';
+    const ros = rosterNos().set;
+    const keep = tkbKeep(ros, CMD.filter);
+    const list = [];
+    dg.live.forEach((t) => { if (t.idx === MAIN.indexOf(stn)) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim: !keep(t.no, t.delay, 'live') }); });
+    dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim: !keep(g.no, 0, 'ghost') }); });
+    (dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim: !keep(t.no, 0, 'dead') }); });
+    const trackOf = (it) => {
+      const rec = trainRec(dg.dt, it.no);
+      const from = rec ? canon(rec.from) : '';
+      const tc = typeClass(it.type);
+      if (it.dir === 'down' && (it.dest === '太宰府' || it.dest === '西鉄五条')) return 2;
+      if (it.dir === 'up' && (from === '太宰府' || from === '西鉄五条')) return 1;
+      if (it.dir === 'down') return (tc === 'ltd' || tc === 'exp') ? 3 : 2;
+      return (tc === 'ltd' || tc === 'exp') ? 4 : 5;
+    };
+    const trackY = { 1: 62, 2: 104, 3: 146, 4: 188, 5: 230 };
+    const byTrack = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+    list.forEach((it) => byTrack[trackOf(it)].push(it));
+    const chips = Object.keys(byTrack).map((k) => tkbRow(byTrack[k], 465, trackY[k])).join('');
+    return `<details class="cmd-track" open>
+      <summary>駅詳細：西鉄二日市<span>4面5線・のりば1〜7／番線は推定</span></summary>
+      <div class="cmdb tkb-detail">
+      <svg class="tkb-svg" width="980" height="360" viewBox="0 0 980 360" role="img" aria-label="西鉄二日市駅配線図">
+        <text class="sub" x="30" y="26">◀ 西鉄福岡(天神)方面（都府楼前）</text>
+        <text class="sub" x="950" y="26" text-anchor="end">大牟田方面（紫）▶ ／ 太宰府方面 ↗</text>
+        <path class="sdl" d="M120 62 L60 34 M120 62 L78 44 M120 62 L96 54"></path>
+        <line class="sdl" x1="18" y1="30" x2="60" y2="30"></line>
+        <line class="sdl" x1="30" y1="42" x2="76" y2="42"></line>
+        <line class="sdl" x1="44" y1="53" x2="94" y2="53"></line>
+        <text class="sub" x="16" y="18">留置線 3本（旧二日市車両基地の名残）</text>
+        <path class="dzl" d="M800 62 C860 54 905 44 950 34"></path>
+        <path class="sdl dash2" d="M800 104 C855 92 900 74 946 48"></path>
+        <text class="dz-t txb" x="952" y="30" text-anchor="end">太宰府線 ▶ 西鉄五条・太宰府</text>
+        <line class="ln" x1="120" y1="62" x2="800" y2="62"></line>
+        <line class="ln" x1="120" y1="104" x2="800" y2="104"></line>
+        <line class="ln" x1="120" y1="146" x2="800" y2="146"></line>
+        <line class="ln" x1="120" y1="188" x2="800" y2="188"></line>
+        <line class="ln" x1="120" y1="230" x2="800" y2="230"></line>
+        <path class="ln2" d="M120 62 L60 104 M120 104 L60 104 M120 146 L60 146 M120 188 L60 146 M120 230 L60 188"></path>
+        <line class="ln" x1="20" y1="104" x2="60" y2="104"></line>
+        <line class="ln" x1="20" y1="146" x2="60" y2="146"></line>
+        <text class="sub" x="20" y="92">上り本線</text>
+        <text class="sub" x="20" y="166">下り本線</text>
+        <path class="ln2" d="M800 104 L860 104 M800 146 L860 146 M800 188 L860 146 M800 230 L860 188 M700 146 L740 188 M740 146 L700 188"></path>
+        <line class="ln" x1="860" y1="104" x2="960" y2="104"></line>
+        <line class="ln" x1="860" y1="146" x2="960" y2="146"></line>
+        <text class="sub" x="880" y="92">上り本線</text>
+        <text class="sub" x="880" y="166">下り本線</text>
+        <text class="sub" x="720" y="206" text-anchor="middle">紫方の渡り線（当駅止まりの折り返し・太宰府送り込み）</text>
+        <rect class="plat" x="300" y="40" width="330" height="13" rx="3"></rect>
+        <rect class="plat" x="300" y="76" width="330" height="15" rx="3"></rect>
+        <rect class="plat" x="300" y="118" width="330" height="15" rx="3"></rect>
+        <rect class="plat" x="300" y="202" width="330" height="15" rx="3"></rect>
+        <text class="dep-t" x="290" y="51" text-anchor="end">1番のりば</text>
+        <text class="dep-t" x="290" y="88" text-anchor="end">2・3番のりば</text>
+        <text class="dep-t" x="290" y="130" text-anchor="end">4・5番のりば</text>
+        <text class="dep-t" x="290" y="214" text-anchor="end">6・7番のりば</text>
+        <text class="tx" x="465" y="272" text-anchor="middle">1番線：太宰府線 発着／太宰府からの上り直通</text>
+        <text class="tx" x="465" y="290" text-anchor="middle">2番線：上り（3番）／下り副本線・太宰府直通（4番）</text>
+        <text class="tx" x="465" y="308" text-anchor="middle">3番線：下り本線（5番）　4番線：上り本線（6番）　5番線：上り副本線（7番）</text>
+        <text class="sub" x="465" y="330" text-anchor="middle">2・3番のりばは通常不使用（多客期の対面乗り換え用／3番は平日朝1本のみ設定）</text>
+        <text class="rule" x="465" y="350" text-anchor="middle">待避の原則：追い越される列車＝副本線（下り4番／上り7番）　追い越す列車＝主本線（下り5番／上り6番）</text>
+        ${chips}
+      </svg>
+      </div>
+    </details>`;
+  }
+
+  /* 駅詳細：西鉄福岡(天神)（頭端式3線）
+     番線割当（推定・基本形）：1番線＝急行／2番線＝普通／3番線＝特急 */
+  function cmdTenjinHTML(dg) {
+    const stn = '福岡(天神)';
+    const ros = rosterNos().set;
+    const keep = tkbKeep(ros, CMD.filter);
+    const list = [];
+    dg.live.forEach((t) => { if (t.idx === 0) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim: !keep(t.no, t.delay, 'live') }); });
+    dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim: !keep(g.no, 0, 'ghost') }); });
+    (dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim: !keep(t.no, 0, 'dead') }); });
+    const trackOf = (it) => { const tc = typeClass(it.type); if (tc === 'ltd') return 3; if (tc === 'exp') return 1; return 2; };
+    const trackY = { 1: 64, 2: 114, 3: 164 };
+    const byTrack = { 1: [], 2: [], 3: [] };
+    list.forEach((it) => byTrack[trackOf(it)].push(it));
+    const chips = Object.keys(byTrack).map((k) => tkbRow(byTrack[k], 370, trackY[k])).join('');
+    return `<details class="cmd-track" open>
+      <summary>駅詳細：西鉄福岡(天神)<span>頭端式 3線／番線は種別からの推定</span></summary>
+      <div class="cmdb tkb-detail">
+      <svg class="tkb-svg" width="980" height="250" viewBox="0 0 980 250" role="img" aria-label="西鉄福岡天神駅配線図">
+        <text class="sub" x="950" y="26" text-anchor="end">薬院・大牟田方面 ▶</text>
+        <line class="buf" x1="70" y1="52" x2="70" y2="176"></line>
+        <line class="ln" x1="70" y1="64" x2="760" y2="64"></line>
+        <line class="ln" x1="70" y1="114" x2="760" y2="114"></line>
+        <line class="ln" x1="70" y1="164" x2="760" y2="164"></line>
+        <path class="ln2" d="M760 64 L830 114 M760 114 L830 114 M760 164 L830 114 M800 64 L845 114 M845 64 L800 114"></path>
+        <line class="ln" x1="830" y1="96" x2="965" y2="96"></line>
+        <line class="ln" x1="830" y1="132" x2="965" y2="132"></line>
+        <text class="sub" x="880" y="86">上り本線</text>
+        <text class="sub" x="880" y="152">下り本線</text>
+        <rect class="plat" x="110" y="42" width="480" height="12" rx="3"></rect>
+        <rect class="plat" x="110" y="78" width="480" height="15" rx="3"></rect>
+        <rect class="plat" x="110" y="128" width="480" height="15" rx="3"></rect>
+        <rect class="plat" x="110" y="178" width="480" height="12" rx="3"></rect>
+        <text class="dep-t" x="600" y="52">降車ホーム</text>
+        <text class="dep-t" x="600" y="89">1番のりば（乗車）</text>
+        <text class="dep-t" x="600" y="139">2番のりば（乗車）／降車ホーム</text>
+        <text class="dep-t" x="600" y="188">3番のりば（乗車）</text>
+        <text class="txb" x="200" y="58">1番線 ＝ 急行</text>
+        <text class="txb" x="200" y="108">2番線 ＝ 普通</text>
+        <text class="txb" x="200" y="158">3番線 ＝ 特急・急行</text>
+        <text class="sub" x="465" y="228" text-anchor="middle">※ 番線の種別割り当ては基本形です（2番線発着の急行・3番線発着の普通など例外あり）</text>
+        ${chips}
+      </svg>
+      </div>
+    </details>`;
+  }
+
+  function cmdTrackDetailsHTML(dg) {
+    return `${cmdFutsukaichiHTML(dg)}
+      ${cmdTenjinHTML(dg)}
+      <p class="cmd-foot">番線レベルの配置は推定です：在線データは駅ブロック単位のため、番線は種別・行先と番線ルール（太宰府直通は西鉄二日市4番線／追い越し時は追い越される列車が副本線・追い越す列車が主本線／天神は種別で固定）にもとづいて置いています。実際の番線は駅の案内・指令の指示でご確認ください。</p>
+      <p class="cmd-foot">配線略図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を参考に自作した略図です（縮尺・分岐器の正確な位置は実物と異なります）。</p>`;
+  }
+
   function cmdBranchHTML(dt) {
     const br = cmdBranchTrains(dt);
     const step = 54, pad = 34;
@@ -1081,8 +1440,12 @@
       where: g.branch ? `${g.at} 付近（支線内・推定）` : `${g.at} 付近（在線情報になし・推定）`,
       delay: 0, kind: 'ghost', branch: g.branch, cars: null, roster: ros.set.has(g.no),
     }));
+    (dg.deads || []).forEach((t) => rows.push({
+      no: t.no, type: t.type, dest: t.dest, where: t.where,
+      delay: 0, kind: 'dead', cars: null, roster: ros.set.has(t.no),
+    }));
     rows.sort((a, b) => {
-      const rank = (r) => (r.kind === 'ghost' && !r.branch ? 0 : r.delay > 0 ? 1 : 2);
+      const rank = (r) => (r.kind === 'ghost' && !r.branch ? 0 : r.delay > 0 ? 1 : r.kind === 'dead' ? 3 : 2);
       return rank(a) - rank(b) || b.delay - a.delay || a.no.localeCompare(b.no);
     });
     const shown = rows.filter((r) => filt === 'all' || (filt === 'delay' && r.delay > 0) || (filt === 'lost' && r.kind === 'ghost') || (filt === 'roster' && r.roster));
@@ -1098,7 +1461,7 @@
         <span class="no">${esc(r.no)}</span>
         <span class="ty">${esc(typeShort(r.type))}</span>
         <span class="dest">${esc(SHORT[r.dest] || r.dest || '—')} 行</span>
-        <span class="dl">${r.delay > 0 ? `+${r.delay}分` : r.kind === 'ghost' ? '未在線?' : '定時'}</span>
+        <span class="dl">${r.delay > 0 ? `+${r.delay}分` : r.kind === 'ghost' ? '未在線?' : r.kind === 'dead' ? '回送' : '定時'}</span>
         <span class="sub"><span class="ps">${esc(r.where)}</span>${car ? `<span class="car">車 ${esc(car)}</span>` : ''}${r.roster ? '<span class="ros">輪番</span>' : ''}</span>
       </button>`;
     }).join('')}</div>${moreBtn}`;
@@ -1137,12 +1500,13 @@
       </div>
       ${loadBox}${errBox}${alert}
       <div class="cmd-filters">
-        <button data-cmd-filter="all" class="${CMD.filter === 'all' ? 'on' : ''}">全列車 <b>${dg.running + dg.ghosts.length}</b></button>
+        <button data-cmd-filter="all" class="${CMD.filter === 'all' ? 'on' : ''}">全列車 <b>${dg.running + dg.ghosts.length + (dg.deads || []).length}</b></button>
         <button data-cmd-filter="delay" class="${CMD.filter === 'delay' ? 'on' : ''}">遅延 <b>${dg.delayed}</b></button>
         <button data-cmd-filter="lost" class="${CMD.filter === 'lost' ? 'on' : ''}">未在線 <b>${dg.lost.length}</b></button>
         <button data-cmd-filter="roster" class="${CMD.filter === 'roster' ? 'on' : ''}">輪番 <b>No.${esc(String((getPattern(state.pattern) || {}).no || ''))}</b></button>
       </div>
       ${cmdBoardHTML(dg)}
+      ${cmdTrackDetailsHTML(dg)}
       ${cmdBranchHTML(dg.dt)}
       <div class="cmd-lhead"><b>在線・運転状況</b><span>${CMD.filter === 'roster' ? esc(ros.label) : CMD.filter === 'delay' ? '遅延のみ' : CMD.filter === 'lost' ? '未在線の推定のみ' : '全列車'}</span></div>
       ${cmdListHTML(dg)}
@@ -1151,6 +1515,7 @@
         <p>位置＝西鉄「列車走行位置」の在線情報（駅ブロック単位・数十秒〜数分前）。「停車中／走行中」は公式の位置と定刻（＋遅延）を突き合わせた<b>推定</b>です。</p>
         <p>破線＝在線情報に該当が無い列車（定刻上は運転中＝運休・運転見合わせ等の可能性、<b>推定</b>）。回送・基地内・運休のいずれかで、運休と断定はできません。</p>
         <p>太宰府線・甘木線は公式の在線情報の対象外のため、時刻表から推定した位置を表示しています。公式の発表・駅の案内とあわせてご確認ください。</p>
+        <p>灰色＝回送列車。在線情報に載らないため、乗務データ（行路）の時刻から発駅→着駅を補間して位置を<b>推定</b>表示しています。勤務基準の時刻で、実際の運行とはずれることがあります。</p>
       </details>`;
   }
   function renderCmd(main) {
