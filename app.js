@@ -288,6 +288,7 @@
     const toks = tokenize(d.system);
     return `<div class="system-block">
         <h4>乗務系統（原本の表記）</h4>
+        ${d.systemRaw && d.systemRaw !== d.system ? '<p class="flow-note">※ 先頭・末尾の駅は輪番表の始・終に合わせています</p>' : ''}
         <div class="system-raw">${toks.map((t) => t.kind === 'train'
           ? `<span class="tok-train">${esc(t.v)}</span>`
           : t.kind === 'stn' ? stationPill(t.v, false)
