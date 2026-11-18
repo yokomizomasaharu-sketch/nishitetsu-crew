@@ -97,6 +97,7 @@
   const PLACE_RE = /^(チヨ|ハヨ|フ|チ|ハ|二|小|善|大|太|津|聖|久|甘|柳)/;
   const PLACE_LABEL = { 'チヨ': '筑紫車両基地', 'チ': '筑紫駅', 'ハヨ': '花畑車両基地', 'ハ': '花畑駅' };
   const PLACE_COLOR = { 'チヨ': '#12897c', 'チ': '#22b8a6', 'ハヨ': '#7bc043', 'ハ': '#5ec14f' };
+  const PLACE_SYMBOL = { 'チヨ': 'チ', 'チ': 'チ', 'ハヨ': 'ハ', 'ハ': 'ハ' };
   const STN_KEY = { '筑紫': 'チ', '花畑': 'ハ' };
   function reportPlace(d) {
     const s = String((d.duties && d.duties[0] && d.duties[0].start) || '');
@@ -104,7 +105,7 @@
     if (!m) return '';
     const code = m[1], after = s.slice(code.length);
     if (isYobi(code)) return STN_KEY[YOBI_STN[code]] || code;
-    if ((code === 'チ' || code === 'ハ') && /^(H)?(入出|出)/.test(after)) {
+    if ((code === 'チ' || code === 'ハ') && /^(入出|出)/.test(after)) {
       return code === 'チ' ? 'チヨ' : 'ハヨ';
     }
     return code;
@@ -744,7 +745,7 @@
         : `<div class="res-summary">${searchState.place ? esc(placeLabel(searchState.place)) + '発 ・ ' : ''}該当 ${hits.length}件<span>（出勤時刻順）</span></div>`;
       res.innerHTML = head + hits.map((r) => `<div class="res-card${hits.length === 1 ? ' single' : ''}" data-goto="${r.p.id}:${r.d.row}">
           <div class="t">
-            <span class="pill stn" style="--pc:${placeColor(r.place)}"><b>${esc(r.place)}</b><i>${esc(placeLabel(r.place))}</i></span>
+            <span class="pill stn" style="--pc:${placeColor(r.place)}"><b>${esc(PLACE_SYMBOL[r.place] || r.place)}</b><i>${esc(placeLabel(r.place))}</i></span>
             <span class="dep-big">${esc(firstDep(r.d))}</span>
             <span class="badge work">${r.p.label}</span>
             <span class="badge off">${CIRC[r.d.dutyNo - 1]}</span>
