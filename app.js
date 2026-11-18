@@ -1109,15 +1109,15 @@
   };
   /* 車両基地ヤードの位置（原図px）：筑紫＝MAIN 16、西鉄柳川＝MAIN 38 */
   const TKIMG_YARD = { 16: { x: 880, y: 165 }, 38: { x: 1080, y: 490 } };
-  /* 画像ボード用ラベル：列番＋種別（特急/急行/NL/回送）＋行先まで。
-     遅延はラベルに入れず、チップ右上の小さなバッジ（.dl）で示す */
-  const tkimgLabel = (it) => {
-    const ts = typeShort(it.type);
-    const tp = (ts === '特急' || ts === '急行' || ts === 'NL' || ts === '回送') ? ts : '';
-    const ds = it.dest ? cmdName(it.dest) + '行' : '';
-    return [it.no, tp, ds].filter(Boolean).join(' ') + (it.kind === 'ghost' ? ' ?' : '');
-  };
-  /* 画像ボード用チップ幅（画像px）：高さ13px・文字8.5pxの小さなタグ前提 */
+  /* 画像ボード用ラベル：v33（ユーザー指示 2026-11-19「特急 大牟田とか
+     いらない、列番だけでいい」）で列車番号のみに変更した。種別・行先は
+     出さない（種別はチップの色、詳細はタイトルとクリック時の詳細パネルで
+     確認する）。遅延はラベルに入れず、従来どおりチップ右上の小さな
+     バッジ（.dl）と late の枠で示す。推定（ghost）は破線＋赤系の見た目で
+     区別する（従来の「?」も付けない） */
+  const tkimgLabel = (it) => String(it.no);
+  /* 画像ボード用チップ幅（画像px）：高さ13px・文字8.5pxの小さなタグ前提。
+     v33 でラベルが列番のみになったため幅は列番の長さで決まる */
   const tkimgChipW = (label) => {
     let w = 10;
     for (const ch of label) w += /[ -~]/.test(ch) ? 5.2 : 8.6;
