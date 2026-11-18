@@ -1,4 +1,4 @@
-const CACHE = 'nishitetsu-crew-v19';
+const CACHE = 'nishitetsu-crew-v20';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './data.js', './manifest.json', './icons/icon-192.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -8,6 +8,8 @@ self.addEventListener('activate', (e) => {
 });
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  // えれサイト4の運用情報はアプリ側でキャッシュ（localStorage）を持つので、SWは素通しにする
+  if (e.request.url.indexOf('elesite-next.com') >= 0) return;
   e.respondWith(
     fetch(e.request).then((res) => {
       const copy = res.clone();

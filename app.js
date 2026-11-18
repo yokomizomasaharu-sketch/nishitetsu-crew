@@ -140,6 +140,251 @@
   const legsOf = (d) => (d && d.legs) || [];
   const shortName = (code) => SHORT[stName(code)] || stName(code);
 
+  /* ================= えれサイト4（車号） =================
+     えれサイト4（https://www.elesite-next.com）の運用表APIから、列番ごとの車号（編成）を取得する。
+     ・西鉄天神大牟田線・甘木線（rosen_code=nishitetsu_omuta / route_id=283）
+     ・所定（車両形式・両数）ごとに運用表が分かれているため、全所定をまとめて1枚の対応表にする
+     ・アプリの列番（例 K181）→ 車号（例 3113+3105+3104）
+     ・投稿型サイトなので、未投稿の運用は「未投稿」として扱う（架空の値は入れない）
+     ================================================================= */
+  const ES = {
+    BASE: 'https://www.elesite-next.com/fastapi/',
+    SITE: 'https://www.elesite-next.com/unyou_table',
+    ROSEN: 'nishitetsu_omuta',
+    ROUTE: 283,
+    KEY: 'elesite:unyou:v1',
+    TTL: 10 * 60 * 1000,       // 自動再取得の間隔
+    STALE: 90 * 60 * 1000,     // これ以上古いと「古い情報」表示
+    status: 'idle',            // idle | loading | ready | error
+    date: '',
+    fetchedAt: 0,
+    diaName: '',
+    diaType: '',               // weekday | holiday
+    counts: { unyou: 0, unyouCar: 0, retsuban: 0, retsubanCar: 0 },
+    map: {},                   // 列番 -> [{ cars, pos, name, shotei, uid, shukko, nyuko }]
+    error: '',
+    staleFailed: false,
+  };
+  const esPad = (n) => String(n).padStart(2, '0');
+  function esDate(d) {
+    // えれサイトは4時で日付が変わる（4時前は前日扱い）
+    const x = new Date((d || new Date()).getTime());
+    if (x.getHours() < 4) x.setDate(x.getDate() - 1);
+    return `${x.getFullYear()}-${esPad(x.getMonth() + 1)}-${esPad(x.getDate())}`;
+  }
+  const esClock = (ts) => {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}/${d.getDate()} ${esPad(d.getHours())}:${esPad(d.getMinutes())}`;
+  };
+  const ES_SUFFIX = /(筑紫以北|筑紫以南|柳川以北|柳川以南)$/;
+  const esNorm = (no) => String(no == null ? '' : no).trim().toUpperCase().replace(ES_SUFFIX, '');
+  const esDiaType = (name) => (/土|休|祝/.test(String(name || '')) ? 'holiday' : 'weekday');
+
+  async function esGet(path, params) {
+    const qs = new URLSearchParams(params || {}).toString();
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const res = await fetch(ES.BASE + path + (qs ? '?' + qs : ''), {
+        signal: ctl.signal, cache: 'no-store', credentials: 'omit',
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.json();
+    } finally { clearTimeout(timer); }
+  }
+
+  function esLoad() {
+    try {
+      const raw = localStorage.getItem(ES.KEY);
+      if (!raw) return;
+      const c = JSON.parse(raw);
+      if (!c || !c.map || c.date !== esDate()) return;   // 別の日のキャッシュは捨てる
+      ES.date = c.date; ES.fetchedAt = c.fetchedAt || 0; ES.diaName = c.diaName || '';
+      ES.diaType = esDiaType(ES.diaName); ES.counts = c.counts || ES.counts;
+      ES.map = c.map; ES.status = 'ready';
+    } catch (e) { /* 壊れたキャッシュは無視 */ }
+  }
+  function esSave() {
+    try {
+      localStorage.setItem(ES.KEY, JSON.stringify({
+        date: ES.date, fetchedAt: ES.fetchedAt, diaName: ES.diaName, counts: ES.counts, map: ES.map,
+      }));
+    } catch (e) { /* 容量不足などは無視（表示は続く） */ }
+  }
+
+  async function esFetch(force) {
+    if (ES.status === 'loading') return;
+    if (!force && ES.status === 'ready' && ES.date === esDate() && Date.now() - ES.fetchedAt < ES.TTL) {
+      renderEsBar(); return;
+    }
+    ES.status = 'loading'; ES.error = ''; renderEsBar();
+    const date = esDate();
+    try {
+      const pat = await esGet('get_today_dia_pattern', { rosen_code: ES.ROSEN, select_date: date });
+      const dayId = pat && pat.day_id;
+      if (!dayId) throw new Error('その日のダイヤを特定できません');
+      const info = await esGet('get_rosen_info', { rosen_code: ES.ROSEN, day_id: dayId, select_date: date, route_id: ES.ROUTE });
+      const shotei = (info && info.shotei_list) || [];
+      const tables = [];
+      const BATCH = 4;   // 相手サイトに負担をかけない程度に並べる
+      for (let i = 0; i < shotei.length; i += BATCH) {
+        const part = await Promise.all(shotei.slice(i, i + BATCH).map((_, k) => esGet('get_unyoutable', {
+          rosen_code: ES.ROSEN, day_id: dayId, select_date: date,
+          edit_mode: 'false', selected_shotei_index: String(i + k), route_id: ES.ROUTE,
+        }).catch(() => null)));
+        tables.push(...part);
+      }
+      if (!tables.some(Boolean)) throw new Error('運用表が空でした');
+      const map = {};
+      const counts = { unyou: 0, unyouCar: 0, retsuban: 0, retsubanCar: 0 };
+      for (const t of tables) {
+        for (const g of (t && t.unyou_table) || []) {
+          for (const u of (g.unyou_group || [])) {
+            counts.unyou++;
+            const cars = String(u.display_sharyo || '').trim();
+            if (cars) counts.unyouCar++;
+            for (const r of (u.retsuban_list || [])) {
+              const no = esNorm(r.retsuban);
+              if (!no || no === '回送') continue;
+              const ent = {
+                cars, pos: Number(r.combination_position || 0), name: String(r.combination_name || ''),
+                shotei: g.shotei || '', uid: u.unyou_id, shukko: u.shukko || '', nyuko: u.nyuko || '',
+              };
+              const list = map[no] || (map[no] = []);
+              if (!list.some((x) => x.uid === ent.uid && x.pos === ent.pos && x.cars === ent.cars)) list.push(ent);
+            }
+          }
+        }
+      }
+      counts.retsuban = Object.keys(map).length;
+      counts.retsubanCar = Object.keys(map).filter((k) => map[k].some((x) => x.cars)).length;
+      ES.map = map; ES.counts = counts;
+      ES.date = date; ES.fetchedAt = Date.now();
+      ES.diaName = (pat && pat.name) || ''; ES.diaType = esDiaType(ES.diaName);
+      ES.status = 'ready'; ES.error = ''; ES.staleFailed = false;
+      esSave(); renderEsBar();
+      const ae = document.activeElement;
+      const typing = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA');
+      const sheetOpen = !$('#sheet').hidden;
+      if ($('.es-detail')) openEsDetail();        // 詳細を開いたまま再取得した場合
+      else if (!typing && !sheetOpen) renderKeep();  // 入力中・シート表示中は触らない
+    } catch (err) {
+      const msg = String((err && err.message) || '');
+      ES.error = /abort/i.test(msg) || (err && err.name === 'AbortError')
+        ? '時間内に応答がありませんでした'
+        : /failed to fetch|networkerror|load failed/i.test(msg)
+          ? 'えれサイト4に接続できません（通信エラー）'
+          : (msg || '通信エラー');
+      if (Object.keys(ES.map).length && ES.date === esDate()) {
+        // 今日のデータが既にあるなら、古い情報で表示を続ける
+        ES.status = 'ready'; ES.staleFailed = true;
+      } else {
+        ES.status = 'error';
+      }
+      renderEsBar();
+    }
+  }
+
+  function esState() { return ES.status; }
+  function esApplies(dt) { return ES.status === 'ready' && ES.diaType === dt; }
+  function esCarsOf(no) {
+    const ent = ES.map[esNorm(no)];
+    if (!ent || !ent.length) return null;                 // えれサイトに列番の掲載なし（回送など）
+    const seen = {};
+    const list = ent.slice().sort((a, b) => a.pos - b.pos).filter((e) => {
+      if (!e.cars) return false;
+      const k = e.cars + '|' + e.pos;
+      if (seen[k]) return false;
+      seen[k] = 1; return true;
+    });
+    if (!list.length) return { none: true, cars: '' };     // 運用はあるが車号が未投稿
+    return { none: false, cars: list.map((e) => (e.name ? `${e.cars}（${e.name}）` : e.cars)).join('＋') };
+  }
+  function esCarTag(no, dt) {
+    if (!esApplies(dt)) return '';
+    const info = esCarsOf(no);
+    if (!info) return `<span class="es-car unknown"><i>車</i>—</span>`;
+    if (info.none) return `<span class="es-car pending"><i>車</i>未投稿</span>`;
+    return `<span class="es-car" title="えれサイト4の運用情報（${esc(esClock(ES.fetchedAt))}取得）"><i>車</i>${esc(info.cars)}</span>`;
+  }
+  function esCarLine(no, dt) {
+    if (!esApplies(dt)) return '';
+    const info = esCarsOf(no);
+    const when = `${esClock(ES.fetchedAt)}取得・えれサイト4`;
+    if (!info) return `<div class="es-line none"><b>車号</b>—<span>${esc(when)}に列番の掲載なし（回送など）</span></div>`;
+    if (info.none) return `<div class="es-line none"><b>車号</b>未投稿<span>${esc(when)}</span></div>`;
+    return `<div class="es-line"><b>車号</b>${esc(info.cars)}<span>${esc(when)}</span></div>`;
+  }
+  function esNoteText(dt) {
+    if (ES.status === 'ready') {
+      if (ES.diaType !== dt) {
+        return `今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤ（${esc(ES.diaName)}）のため、${dt === 'holiday' ? '土日祝' : '平日'}の車号は表示していません。`;
+      }
+      return `車号＝えれサイト4の運用情報（${esc(esClock(ES.fetchedAt))}取得・利用者の投稿）。「—」は未投稿または回送です。${ES.staleFailed ? '現在再取得できていないため前回の情報です。' : ''}`;
+    }
+    if (ES.status === 'loading') return '車号を取得しています…（えれサイト4）';
+    if (ES.status === 'error') return '車号を取得できませんでした（えれサイト4）。上の車号バーの「↻」で再取得できます。';
+    return '';
+  }
+
+  function esBarText() {
+    if (ES.status === 'loading') return ['load', '車号を取得中…（えれサイト4）'];
+    if (ES.status === 'error') return ['err', '車号を取得できません · タップで詳細'];
+    if (ES.status === 'ready') {
+      const c = ES.counts;
+      const stale = ES.staleFailed || Date.now() - ES.fetchedAt > ES.STALE;
+      const txt = ES.staleFailed
+        ? `車号 ${c.retsubanCar}/${c.retsuban}列車 · ${esClock(ES.fetchedAt)}取得（更新できません）`
+        : `車号 ${c.retsubanCar}/${c.retsuban}列車 · ${esClock(ES.fetchedAt)}取得`;
+      return [stale ? 'stale' : 'ok', txt];
+    }
+    return ['idle', '車号：えれサイト4から取得（タップ）'];
+  }
+  function renderEsBar() {
+    const bar = $('#esBar');
+    if (!bar) return;
+    const [cls, txt] = esBarText();
+    bar.dataset.state = cls;
+    bar.hidden = false;
+    const main = $('#esBarMain');
+    if (main) main.innerHTML = `<span class="es-dot"></span><span class="es-txt">${esc(txt)}</span>`;
+    const rf = $('#esRefresh');
+    if (rf) { rf.disabled = ES.status === 'loading'; rf.classList.toggle('spin', ES.status === 'loading'); }
+    const tb = $('.tabs');
+    if (tb) bar.style.top = (tb.offsetTop + tb.offsetHeight) + 'px';
+  }
+  function renderKeep() {
+    const y = window.scrollY;
+    render();
+    window.scrollTo({ top: y });
+    renderEsBar();
+  }
+
+  function openEsDetail() {
+    const c = ES.counts;
+    const pending = Object.keys(ES.map).filter((k) => !ES.map[k].some((x) => x.cars)).sort();
+    const rows = [
+      ['対象日', `${ES.date || esDate()}（${ES.diaName || '—'}）`],
+      ['取得', ES.fetchedAt ? `${esClock(ES.fetchedAt)}（${Math.max(0, Math.round((Date.now() - ES.fetchedAt) / 60000))}分前）` : '—'],
+      ['車号あり', `運用 ${c.unyouCar}/${c.unyou} ・ 列車 ${c.retsubanCar}/${c.retsuban}`],
+    ];
+    if (ES.status === 'error') rows.unshift(['状態', '取得できませんでした']);
+    else if (ES.staleFailed) rows.push(['更新', `失敗（${ES.error}）`]);
+    showSheet(`<div class="sheet-head"><h2>車号（えれサイト4）</h2><button class="sheet-close" data-close>✕</button></div>
+      <div class="es-detail">
+        ${ES.status === 'error' ? `<p class="es-err">${esc(ES.error)}</p>` : ''}
+        <dl class="es-dl">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+        <div class="btn-row"><button class="btn primary" id="esReload"${ES.status === 'loading' ? ' disabled' : ''}>再取得</button>
+          <a class="btn" href="${ES.SITE}" target="_blank" rel="noopener noreferrer">運用表を開く</a></div>
+        ${pending.length ? `<h4 class="tl-title" style="margin-top:14px">車号が未投稿の列番（${pending.length}件）</h4>
+          <p class="es-pending">${pending.slice(0, 80).map(esc).join('　')}${pending.length > 80 ? `　ほか${pending.length - 80}件` : ''}</p>` : ''}
+        <p class="es-caution">えれサイト4の運用情報は利用者の投稿です。未投稿・誤り・あとからの変更があります。乗務前に運用表（原本）でもご確認ください。今日のダイヤ（${esc(ES.diaName || '—')}）の内容で、ほかのダイヤの日には表示しません。回送列車は列番での掲載がないため車号は出ません。</p>
+      </div>`, () => {
+      const r = $('#esReload');
+      if (r) r.addEventListener('click', () => esFetch(true));
+    });
+  }
+
   /* ================= ROSTER ================= */
   function renderRoster(main) {
     const pats = patternsOf(state.dayType);
@@ -299,6 +544,7 @@
         <div class="fi-main"><span class="no">${esc(lg.t.join('→'))}</span><span class="type ${cls}">${esc(typeShort(r && r.type))}</span></div>
         <div class="fi-sub">${esc(lg.bn)} → ${esc(lg.an)}</div>
         <div class="fi-end">${fmtT(lg.at)} ${esc(SHORT[lg.an] || lg.an)}</div>
+        ${(() => { const ci = esApplies(dt) ? esCarsOf(lg.t[0]) : null; return ci && !ci.none ? `<div class="fi-car" title="車号 ${esc(ci.cars)}">車 ${esc(ci.cars)}</div>` : ''; })()}
       </div>`);
       if (lg.at != null) prevT = lg.at;
     });
@@ -338,6 +584,7 @@
         <p class="sys-legend"><b>チ</b>筑紫駅（交代）　<b>チ出・チ入</b>筑紫車両基地　<b>チヨ・ヨ</b>予備（入出庫代行＝休憩）　<b>ハ</b>花畑駅</p>
       </div>
       <h4 class="tl-title">乗務タイムライン（乗り込み駅 → 降りる駅）</h4>
+      ${esNoteText(dt) ? `<p class="es-note">${esNoteText(dt)}</p>` : ''}
       ${renderTimeline(d, dt)}
       <div class="btn-row">
         <button class="btn primary" data-diagram="${p.id}:${d.row}">箱ダイヤで見る</button>
@@ -391,6 +638,7 @@
           </div>
         </div>
         ${r ? `<div class="sub">全区間 ${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : '<div class="sub">列車データが見つかりません</div>'}
+        ${esCarTag(lg.t[0], dt)}
         ${lg.flag === 'whole' ? '<div class="sub">※ 乗務区間の途中時刻を原本から特定できず、列車の全区間を表示しています</div>' : ''}
       </div></li>`;
       html += markLine(lg.post, lg.ayobi);
@@ -419,10 +667,11 @@
   /* ================= TRAIN SHEET ================= */
   function openTrain(no) {
     const w = trainRec('weekday', no), h = trainRec('holiday', no);
-    const card = (label, r) => r ? `<div class="res-card static">
+    const card = (label, r, dt) => r ? `<div class="res-card static">
         <div class="t"><span class="no">${esc(r.no)}</span><span class="type ${typeClass(r.type)}">${esc(typeShort(r.type))}</span>
         <span class="run">${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}</span></div>
         <div class="d">${label}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}${r.note ? ' ・ ' + esc(r.note) : ''}</div>
+        ${esCarLine(r.no, dt)}
       </div>` : '';
     const uses = [];
     for (const p of D.patterns) for (const d of p.days)
@@ -431,7 +680,7 @@
         uses.push({ p, d, lg });
       }
     showSheet(`<div class="sheet-head"><h2>列車 ${esc(no)}</h2><button class="sheet-close" data-close>✕</button></div>
-      ${card('平日', w)}${card('土日祝', h)}
+      ${card('平日', w, 'weekday')}${card('土日祝', h, 'holiday')}
       ${uses.length ? `<h4 class="tl-title" style="margin-top:14px">この列車を担当する行路（${uses.length}件）</h4>` +
         uses.map((u) => `<div class="res-card" data-goto="${u.p.id}:${u.d.row}">
           <div class="t"><span class="badge work">${u.p.label}</span><span class="badge off">${CIRC[u.d.dutyNo - 1]}</span>
@@ -612,6 +861,15 @@
       if (g.yobi) svg += `<circle class="dg-yobidot" cx="${X(g.t1).toFixed(1)}" cy="${Y(g.a)}" r="3"/>`;
       const mx = (X(g.t1) + X(g.t2)) / 2, my = (Y(g.a) + Y(g.b)) / 2;
       svg += `<text class="dg-label" x="${mx.toFixed(1)}" y="${(my - 3).toFixed(1)}" text-anchor="middle">${esc(g.no)}</text>`;
+      if (esApplies(dt)) {
+        const ci = esCarsOf(g.no.split('→')[0]);
+        if (ci && !ci.none) {
+          const wide = Math.abs(X(g.t2) - X(g.t1));
+          const full = ci.cars;
+          const show = (full.length * 3.7 + 8) <= wide ? full : full.split('＋')[0];
+          svg += `<text class="dg-car" x="${mx.toFixed(1)}" y="${(my + 6.6).toFixed(1)}" text-anchor="middle">${esc(show)}</text>`;
+        }
+      }
     });
     svg += '</svg>';
     const skipped = segs.filter((x) => x.skip).map((x) => x.no);
@@ -622,6 +880,7 @@
     const usedYobi = draw.some((g) => g.yobi || g.rest);
     if (usedDepot) note += '／筑紫基地＝筑紫車両基地（チ出・チ入の本人入出庫）';
     if (usedYobi) note += '／休憩＝予備の運転士が入出庫を代行';
+    if (esApplies(dt)) note += '／列番の下の小さい数字＝車号（えれサイト4・未投稿は非表示）';
     return { svg, rail, note };
   }
 
@@ -978,6 +1237,17 @@
   if (D && D.version) $('#verBadge').textContent = D.version;
   applyHash();
   render();
+
+  /* えれサイト4（車号） */
+  esLoad();
+  renderEsBar();
+  esFetch(false);
+  if ($('#esBarMain')) $('#esBarMain').addEventListener('click', () => {
+    if (ES.status === 'idle') esFetch(true); else openEsDetail();
+  });
+  if ($('#esRefresh')) $('#esRefresh').addEventListener('click', () => esFetch(true));
+  window.addEventListener('resize', () => renderEsBar());
+
   window.addEventListener('hashchange', () => { if (applyHash()) render(); });
   if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 })();

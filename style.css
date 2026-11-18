@@ -437,3 +437,70 @@ html[data-theme="light"] .rail-row.depot { color: #0c6d62; }
 .dg-yobidot { fill: var(--yobi); stroke: var(--bg-2); stroke-width: 1.2; }
 .dg-rest { stroke: var(--yobi); stroke-width: 4; stroke-linecap: round; opacity: .8; }
 .dg-resttx { font-size: 8.5px; font-weight: 800; fill: var(--yobi); paint-order: stroke; stroke: var(--bg-2); stroke-width: 2.4px; }
+
+/* ---------- えれサイト4 車号バー ---------- */
+.esbar {
+  position: sticky; top: 111px; z-index: 24;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px 7px;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.esbar .es-main {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 7px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 7px 10px; color: var(--fg-2); font: inherit; font-size: 12px; font-weight: 700;
+  text-align: left; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.esbar .es-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--fg-3); }
+.esbar[data-state="ok"] .es-dot { background: var(--exp); box-shadow: 0 0 0 3px color-mix(in srgb, var(--exp) 22%, transparent); }
+.esbar[data-state="stale"] .es-dot { background: var(--weekly); box-shadow: 0 0 0 3px color-mix(in srgb, var(--weekly) 22%, transparent); }
+.esbar[data-state="err"] .es-dot { background: var(--ltd); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ltd) 22%, transparent); }
+.esbar[data-state="load"] .es-dot { background: var(--accent); animation: espulse 1s ease-in-out infinite; }
+@keyframes espulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
+.esbar .es-refresh {
+  flex: 0 0 auto; width: 36px; height: 34px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--fg-2);
+  font-size: 16px; line-height: 1; cursor: pointer;
+}
+.esbar .es-refresh:disabled { opacity: .5; }
+.esbar .es-refresh.spin { animation: esspin .9s linear infinite; }
+@keyframes esspin { to { transform: rotate(360deg) } }
+
+/* 車号（列車カード・行路詳細） */
+.es-car {
+  display: inline-flex; align-items: center; gap: 5px; margin-top: 6px;
+  padding: 3px 9px 3px 4px; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); font-size: 12.5px; font-weight: 800;
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}
+.es-car i { font-style: normal; font-size: 9.5px; font-weight: 800; padding: 1px 4px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.es-car.pending { background: var(--bg-3); color: var(--fg-2); }
+.es-car.pending i { background: var(--line); }
+.es-car.unknown { background: transparent; color: var(--fg-3); font-weight: 700; }
+.es-car.unknown i { background: var(--bg-3); }
+.fi-car {
+  font-size: 10px; font-weight: 800; color: var(--accent); margin-top: 2px;
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.es-note { font-size: 11px; color: var(--fg-3); margin: -3px 2px 9px; line-height: 1.55; }
+.dg-car { font-size: 6.6px; fill: var(--fg-3); font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--bg-2); stroke-width: 2px; stroke-linejoin: round; }
+.es-line { font-size: 12px; color: var(--fg); margin-top: 5px; display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.es-line b { font-size: 10px; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 5px; padding: 1px 5px; }
+.es-line span { font-size: 10.5px; color: var(--fg-3); font-weight: 500; }
+.es-line.none { color: var(--fg-2); }
+.es-line.none b { color: var(--fg-3); background: var(--bg-3); }
+
+/* 車号の詳細シート */
+.es-dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 4px 0 0; font-size: 13px; }
+.es-dl dt { color: var(--fg-3); font-weight: 700; font-size: 12px; }
+.es-dl dd { margin: 0; font-weight: 700; }
+.es-pending { font-size: 12px; color: var(--fg-2); line-height: 1.95; font-family: ui-monospace, monospace; }
+.es-caution { font-size: 11px; color: var(--fg-3); margin: 14px 0 0; line-height: 1.65; }
+.es-err { color: var(--ltd); font-size: 12.5px; font-weight: 700; margin: 0 0 8px; }
+a.btn { text-decoration: none; }
