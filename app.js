@@ -296,7 +296,7 @@
       cards.push(`<div class="flow-item train ${cls}${lg.flag === 'conflict' ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
         <div class="fi-time">${fmtT(lg.bt)}</div>
         <div class="fi-main"><span class="no">${esc(lg.t.join('→'))}</span><span class="type ${cls}">${esc(typeShort(r && r.type))}</span></div>
-        <div class="fi-sub">${esc(lg.bn)}${lg.btype === 'depot' ? '<i class="ftag">基地</i>' : ''} → ${esc(lg.an)}${lg.atype === 'depot' ? '<i class="ftag">基地</i>' : ''}</div>
+        <div class="fi-sub">${esc(lg.bn)} → ${esc(lg.an)}</div>
         <div class="fi-end">${fmtT(lg.at)} ${esc(SHORT[lg.an] || lg.an)}</div>
       </div>`);
       if (lg.at != null) prevT = lg.at;
@@ -345,7 +345,11 @@
   }
 
   function placeSpan(name, depot, yobi, hand) {
-    return `<span class="leg-s">${esc(name)}${depot ? '<em class="ptag depot">基地</em>' : ''}${yobi ? '<em class="ptag yobi">予備代行</em>' : ''}${hand ? '<em class="ptag hand">交代</em>' : ''}</span>`;
+    const tags = [];
+    if (depot && !/基地/.test(name)) tags.push('<em class="ptag depot">基地</em>');
+    if (yobi) tags.push('<em class="ptag yobi">予備代行</em>');
+    if (hand) tags.push('<em class="ptag hand">交代</em>');
+    return `<span class="leg-s">${esc(name)}${tags.join('')}</span>`;
   }
 
   function renderTimeline(d, dt) {
@@ -354,10 +358,10 @@
     let html = '<ul class="tl">';
     let prevAt = toMin(firstDep(d));
     let hasDepot = false, hasYobi = false;
-    const markLine = (arr) => {
+    const markLine = (arr, yobi) => {
       const mk = (arr || []).filter((m) => MARK_INFO[m] && m !== '普' && m !== '~');
       if (!mk.length) return '';
-      return mk.map((m) => `<li class="mark"><div class="note"><b>${esc(m)}</b>${markDesc(m)}</div></li>`).join('');
+      return mk.map((m) => `<li class="mark"><div class="note"><b>${esc(m)}</b>${yobi && (m === '出' || m === '入' || m === '入出') ? '<span class="md">（予備の運転士が入出庫代行・本人は休憩）</span>' : markDesc(m)}</div></li>`).join('');
     };
     legs.forEach((lg) => {
       const r = trainRec(dt, lg.t[0]);
@@ -369,7 +373,7 @@
         const rest = (lg.bt != null && prevAt != null) ? lg.bt - prevAt : null;
         html += `<li class="rest"><div class="note"><b>休憩</b><span class="md">予備の運転士が入出庫を代行${rest != null ? `（${fmtT(prevAt)}〜${fmtT(lg.bt)} 約${rest}分）` : ''}。本人は${esc(lg.bn)}から乗り込み</span></div></li>`;
       }
-      html += markLine(lg.pre);
+      html += markLine(lg.pre, lg.byobi);
       html += `<li class="train"><div class="train-card ${cls}${warn ? ' warn' : ''}" data-train="${esc(lg.t[0])}">
         <div class="tc-top">
           <span class="no">${esc(lg.t.join('→'))}</span>
@@ -388,7 +392,7 @@
         ${r ? `<div class="sub">全区間 ${esc(r.dep)} ${esc(canon(r.from))} → ${esc(r.arr)} ${esc(canon(r.to))}${r.set ? ' ・ ' + esc(r.set) : ''}${r.carType ? ' ・ ' + esc(r.carType) + '形' + esc(r.cars) + '両' : ''}</div>` : '<div class="sub">列車データが見つかりません</div>'}
         ${lg.flag === 'whole' ? '<div class="sub">※ 乗務区間の途中時刻を原本から特定できず、列車の全区間を表示しています</div>' : ''}
       </div></li>`;
-      html += markLine(lg.post);
+      html += markLine(lg.post, lg.ayobi);
       if (lg.ayobi) {
         html += `<li class="rest"><div class="note"><b>予備</b><span class="md">入出庫は予備の運転士が代行。本人は${esc(lg.an)}で降車</span></div></li>`;
       }
