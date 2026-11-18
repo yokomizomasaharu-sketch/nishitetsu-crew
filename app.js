@@ -152,7 +152,7 @@
     SITE: 'https://www.elesite-next.com/unyou_table',
     ROSEN: 'nishitetsu_omuta',
     ROUTE: 283,
-    KEY: 'elesite:unyou:v1',
+    KEY: 'elesite:unyou:v2',
     TTL: 10 * 60 * 1000,       // 自動再取得の間隔
     STALE: 90 * 60 * 1000,     // これ以上古いと「古い情報」表示
     status: 'idle',            // idle | loading | ready | error
@@ -244,14 +244,16 @@
             const cars = String(u.display_sharyo || '').trim();
             if (cars) counts.unyouCar++;
             for (const r of (u.retsuban_list || [])) {
-              const no = esNorm(r.retsuban);
+              const raw = String(r.retsuban == null ? '' : r.retsuban).trim();
+              const no = esNorm(raw);
               if (!no || no === '回送') continue;
+              const sm = raw.match(ES_SUFFIX);
               const ent = {
                 cars, pos: Number(r.combination_position || 0), name: String(r.combination_name || ''),
-                shotei: g.shotei || '', uid: u.unyou_id, shukko: u.shukko || '', nyuko: u.nyuko || '',
+                sec: sm ? sm[1] : '', shotei: g.shotei || '', uid: u.unyou_id, shukko: u.shukko || '', nyuko: u.nyuko || '',
               };
               const list = map[no] || (map[no] = []);
-              if (!list.some((x) => x.uid === ent.uid && x.pos === ent.pos && x.cars === ent.cars)) list.push(ent);
+              if (!list.some((x) => x.uid === ent.uid && x.pos === ent.pos && x.sec === ent.sec)) list.push(ent);
             }
           }
         }
@@ -290,15 +292,24 @@
   function esCarsOf(no) {
     const ent = ES.map[esNorm(no)];
     if (!ent || !ent.length) return null;                 // えれサイトに列番の掲載なし（回送など）
-    const seen = {};
-    const list = ent.slice().sort((a, b) => a.pos - b.pos).filter((e) => {
-      if (!e.cars) return false;
-      const k = e.cars + '|' + e.pos;
-      if (seen[k]) return false;
-      seen[k] = 1; return true;
+    const cars = ent.filter((e) => e.cars);
+    if (!cars.length) return { none: true, cars: '' };    // 運用はあるが車号が未投稿
+    // 同じ列番が「筑紫以北／以南」で別の編成になることがあるので、そのときは区間名を添えて分けて出す
+    const secs = Array.from(new Set(cars.map((e) => e.sec || '').filter(Boolean)));
+    const bySec = secs.length > 1;
+    const groups = {};
+    const order = [];
+    cars.slice().sort((a, b) => a.pos - b.pos).forEach((e) => {
+      const k = bySec ? (e.sec || '') : '';
+      if (!groups[k]) { groups[k] = []; order.push(k); }
+      const seen = groups[k];
+      if (!seen.some((x) => x.cars === e.cars && x.pos === e.pos)) seen.push(e);
     });
-    if (!list.length) return { none: true, cars: '' };     // 運用はあるが車号が未投稿
-    return { none: false, cars: list.map((e) => (e.name ? `${e.cars}（${e.name}）` : e.cars)).join('＋') };
+    const parts = order.map((k) => {
+      const body = groups[k].map((e) => (e.name ? `${e.cars}（${e.name}）` : e.cars)).join('＋');
+      return k ? `${k} ${body}` : body;
+    });
+    return { none: false, cars: parts.join(' ／ ') };
   }
   function esCarTag(no, dt) {
     if (!esApplies(dt)) return '';
@@ -864,10 +875,13 @@
       if (esApplies(dt)) {
         const ci = esCarsOf(g.no.split('→')[0]);
         if (ci && !ci.none) {
-          const wide = Math.abs(X(g.t2) - X(g.t1));
-          const full = ci.cars;
-          const show = (full.length * 3.7 + 8) <= wide ? full : full.split('＋')[0];
-          svg += `<text class="dg-car" x="${mx.toFixed(1)}" y="${(my + 6.6).toFixed(1)}" text-anchor="middle">${esc(show)}</text>`;
+          const avail = Math.abs(X(g.t2) - X(g.t1)) - 4;
+          let show = ci.cars;
+          if (show.length * 3.7 > avail) {           // 入りきらないときは先頭の編成だけ
+            const first = show.split(/[+＋／]/)[0].trim();
+            show = first.length * 3.7 <= avail ? first : '';
+          }
+          if (show) svg += `<text class="dg-car" x="${mx.toFixed(1)}" y="${(my + 6.6).toFixed(1)}" text-anchor="middle">${esc(show)}</text>`;
         }
       }
     });
