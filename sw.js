@@ -1,4 +1,4 @@
-const CACHE = 'nishitetsu-crew-v37';
+const CACHE = 'nishitetsu-crew-v38';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './data.js', './stops.js', './manifest.json', './icons/icon-192.png', './assets/track-map.jpg'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

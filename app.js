@@ -850,15 +850,7 @@
     return secs;
   }
 
-  /* 表示確認用（?offmock=1 のときだけサンプルを流す・確認後このブロックは削除する） */
-  if (/[?&]offmock=1/.test(location.search)) {
-    OFF.mock = true;
-    OFF.x = { status: 'ready', at: Date.now(), failed: false, error: '', posts: [{ id: 'm1', label: '5m', body: '【運転見合わせ】11月19日9時20分現在、西鉄天神大牟田線は西鉄二日市〜筑紫間で人身事故のため上下線で運転を見合わせています。復旧見込みは立っていません。' }] };
-    OFF.chien = { status: 'ready', at: Date.now(), failed: false, error: '', day: offToday(), rows: [{ band: '午前8時～9時まで', text: '10分の遅延', min: 10 }] };
-    OFF.jik = { status: 'ready', at: Date.now(), failed: false, error: '', text: '電車：人身事故のため運転を見合わせています。', secs: [{ title: '電車', text: '人身事故のため、西鉄天神大牟田線の一部列車に運転を見合わせが発生しています。' }] };
-  }
   async function offFetchX(force) {
-    if (OFF.mock) return;
     if (!force && (OFF.x.status === 'loading' || (OFF.x.at && Date.now() - OFF.x.at < OFF.TTL.x))) return;
     OFF.x.status = 'loading';
     try {
@@ -875,7 +867,6 @@
     offSave(); offRepaint();
   }
   async function offFetchChien(force) {
-    if (OFF.mock) return;
     if (!force && (OFF.chien.status === 'loading' || (OFF.chien.at && Date.now() - OFF.chien.at < OFF.TTL.chien))) return;
     OFF.chien.status = 'loading';
     try {
@@ -892,7 +883,6 @@
     offSave(); offRepaint();
   }
   async function offFetchJik(force) {
-    if (OFF.mock) return;
     if (!force && (OFF.jik.status === 'loading' || (OFF.jik.at && Date.now() - OFF.jik.at < OFF.TTL.jik))) return;
     OFF.jik.status = 'loading';
     try {
@@ -914,7 +904,6 @@
     offFetchJik(force);
   }
   function offLoad() {
-    if (OFF.mock) return;
     try {
       const raw = localStorage.getItem(OFF.KEY);
       if (!raw) return;
@@ -2385,7 +2374,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v37';
+    s.src = 'stops.js?v38';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
