@@ -2384,7 +2384,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v35';
+    s.src = 'stops.js?v36';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
