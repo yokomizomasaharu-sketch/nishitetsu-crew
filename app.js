@@ -1940,7 +1940,7 @@
         <span class="no">${esc(r.no)}</span>
         <span class="ty">${esc(typeShort(r.type))}</span>
         <span class="dest">${esc(SHORT[r.dest] || r.dest || '—')} 行</span>
-        <span class="dl">${r.delay > 0 ? `+${r.delay}分` : r.kind === 'ghost' ? '未在線?' : r.kind === 'dead' ? '回送' : '定時'}</span>
+        <span class="dl">${r.delay > 0 ? `+${r.delay}分` : r.kind === 'ghost' ? (r.branch ? '支線内?' : '未在線?') : r.kind === 'dead' ? '回送' : '定時'}</span>
         <span class="sub"><span class="ps">${esc(r.where)}</span>${r.line && !String(r.where || '').startsWith(r.line) ? `<span class="ln">${esc(r.line)}</span>` : ''}${car ? `<span class="car">車 ${esc(car)}</span>` : ''}${r.roster ? '<span class="ros">輪番</span>' : ''}</span>
       </button>`;
     }).join('')}</div>${moreBtn}`;
@@ -2603,7 +2603,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v40';
+    s.src = 'stops.js?v41';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
