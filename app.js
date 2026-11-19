@@ -914,6 +914,7 @@
     offFetchJik(force);
   }
   function offLoad() {
+    if (OFF.mock) return;
     try {
       const raw = localStorage.getItem(OFF.KEY);
       if (!raw) return;
@@ -2384,7 +2385,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v36';
+    s.src = 'stops.js?v37';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
