@@ -1121,6 +1121,118 @@
   const CMD_BRANCH_STN = ['西鉄五条', '太宰府', '五郎丸', '学校前', '古賀茶屋', '北野', '大城', '金島', '大堰', '本郷', '上浦', '馬田', '甘木'];
   const cmdIsBranch = (name) => CMD_BRANCH_STN.indexOf(name) >= 0;
 
+  /* ---- 列番の頭数字＝線区【2026-11-19 本人確認「6が太宰府線、7が甘木線」】----
+     4桁列番の千の位で系統が決まる：6xxx＝太宰府線、7xxx＝甘木線。
+     編成両数表のデータでも裏が取れている（平日：6xxx 149本すべてが西鉄二日市⇔太宰府、
+     7xxx 80本すべてが甘木発着＝甘木側が支線で、反対側は本線へ直通）。
+     6xxx は本線を走らないので、公式在線の row（本線の駅ブロック）では表せない。
+     7xxx は甘木線と本線を直通するため、支線の区間だけを支線として扱う。 */
+  const CMD_LINE_OF_NO = { '6': 'dz', '7': 'ag' };
+  const CMD_LINE_NAME = { dz: '太宰府線', ag: '甘木線' };
+  const CMD_LINE_HEAD = { dz: '6', ag: '7' };
+  const CMD_LINE_TERM = { dz: '太宰府', ag: '甘木' };
+  const cmdLineOfNo = (no) => CMD_LINE_OF_NO[String(no == null ? '' : no).charAt(0)] || null;
+  /* 公式在線の col は線の並び。支線（太宰府線・甘木線）を走る列車は 5・6 に入り、
+     本線の列車は 1〜4。支線の列車の row は本線の駅に読み替えられない座標になる */
+  const CMD_BRANCH_COL = 5;
+
+  /* 支線区間：停車駅の並びのうち、支線の駅が連続している部分を切り出す。
+     直通列車（7xxx の本線側・太宰府直通の急行）でも支線内だけを支線として扱える。
+     戻り値：{ b, i0, i1, ks }（i0/i1＝停車駅 index、ks[i]＝その駅の支線の駅順） */
+  function cmdBranchSeg(sch, bid) {
+    if (!sch || sch.length < 2) return null;
+    const b = CMD_BRANCH.find((x) => x.id === bid);
+    if (!b) return null;
+    const ks = sch.map((s) => b.order.indexOf(s.name));
+    let best = null;
+    for (let i = 0; i < ks.length; i++) {
+      if (ks[i] < 0) continue;
+      let j = i;
+      while (j + 1 < ks.length && ks[j + 1] >= 0) j++;
+      if (!best || (j - i) > (best.i1 - best.i0)) best = { i0: i, i1: j };
+      i = j;
+    }
+    if (!best) return null;
+    return { b, i0: best.i0, i1: best.i1, ks };
+  }
+  /* 支線区間内の位置（支線の駅順の小数＝0が分岐駅、末尾が終点）を時刻から求める。
+     区間の外なら null。at＝駅に停車中／prev〜next＝駅間 */
+  function cmdBranchAt(sch, seg, t) {
+    if (!seg || t == null || !isFinite(t)) return null;
+    const ks = seg.ks;
+    for (let i = seg.i0; i <= seg.i1; i++) {
+      const s = sch[i];
+      const a = s.arr, d = s.dep;
+      if (a != null && d != null && t >= a && t < d) return { pos: ks[i], at: true, name: s.name, prev: null, next: null };
+      if (a == null && d != null && t < d) return { pos: ks[i], at: true, name: s.name, prev: null, next: null };
+      if (i < seg.i1) {
+        const n = sch[i + 1];
+        const d0 = d != null ? d : a;
+        const a1 = n.arr != null ? n.arr : n.dep;
+        if (d0 != null && a1 != null && t >= d0 && t < a1) {
+          const fr = Math.max(0, Math.min(1, (t - d0) / Math.max(1, a1 - d0)));
+          return { pos: ks[i] + (ks[i + 1] - ks[i]) * fr, at: false, name: null, prev: s.name, next: n.name };
+        }
+      }
+    }
+    return null;
+  }
+  /* この列車の系統の支線：列番の頭数字（6/7）を第一に、無ければ支線だけの駅で判定する。
+     分岐駅（西鉄二日市・宮の陣）だけでは支線と決めない（本線の列車も発着するため） */
+  function cmdBranchOfNo(dt, no) {
+    const lineNo = cmdLineOfNo(no);
+    if (lineNo) return lineNo;
+    const rec = trainRec(dt, no);
+    if (!rec) return null;
+    const f = canon(rec.from), t = canon(rec.to);
+    const a = cmdIsBranch(f) ? CMD_BRANCH_OF[f] : null;
+    const b = cmdIsBranch(t) ? CMD_BRANCH_OF[t] : null;
+    return a || b || null;
+  }
+  /* 列車の支線内の位置（時刻 t のとき）。支線区間の外なら null */
+  function cmdBranchPos(dt, no, t, sch0) {
+    const bid = cmdBranchOfNo(dt, no);
+    if (!bid) return null;
+    const sch = sch0 || trainSched(dt, no);
+    const seg = cmdBranchSeg(sch, bid);
+    const at = cmdBranchAt(sch, seg, t);
+    if (!at) return null;
+    return { bid, seg, at };
+  }
+  /* 支線を走っている列車の cmdInfo。位置は時刻表の各駅時刻から推定する
+     （公式在線の row は支線の座標系で、本線の駅に読み替えられないため） */
+  function cmdBranchInfo(no, p, dt, t, dl) {
+    const bid0 = cmdBranchOfNo(dt, no);
+    if (!bid0) return null;
+    const sch = trainSched(dt, no);
+    const seg = cmdBranchSeg(sch, bid0);
+    if (!seg) return null;
+    const b = seg.b;
+    let br = cmdBranchAt(sch, seg, t);
+    if (!br) {
+      /* 公式の col が支線側の線なのに時刻が区間の外なら、分岐駅／終点に寄せて出す
+         （本線の駅に置かないため）。col が本線側なら本線の列車として扱う */
+      if (!(Number(p.col) >= CMD_BRANCH_COL)) return null;
+      const s0 = sch[seg.i0], s1 = sch[seg.i1];
+      const t0 = s0.dep != null ? s0.dep : s0.arr;
+      const k = (t != null && t0 != null && t < t0) ? seg.ks[seg.i0] : seg.ks[seg.i1];
+      br = { pos: k, at: true, name: b.order[k], prev: null, next: null, edge: true };
+    }
+    const rec = trainRec(dt, no) || {};
+    const dir = seg.ks[seg.i1] < seg.ks[seg.i0] ? 'up' : 'down';
+    return {
+      no, branch: b.id, line: b.name, lineHead: CMD_LINE_HEAD[b.id], est: true,
+      bpos: br.pos, bsize: Math.max(1, b.order.length - 1),
+      idx: null, row: Number(p.row), col: Number(p.col) || 0,
+      st: br.at ? br.name : '', prev: br.prev, next: br.next, frac: 0, dir,
+      delay: dl, at: br.at, pred: br, done: false, edge: !!br.edge,
+      type: p.type || rec.type || '', dest: p.dest || (rec.to ? canon(rec.to) : ''),
+      cars: p.cars || '', doors: p.doors || '',
+      where: br.at ? `${b.name} ${br.name} 停車中` : `${b.name} ${br.prev}〜${br.next} 走行中`,
+      short: br.at ? cmdName(br.name) : `${cmdName(br.prev)}〜${cmdName(br.next)}`,
+    };
+  }
+
   /* ---- 公式在線情報の行番号 ↔ 駅（0〜3＝西鉄福岡(天神)、以降1駅3行） ---- */
   const posIdxOf = (row) => {
     const r = Number(row);
@@ -1181,14 +1293,18 @@
   function cmdInfo(no) {
     const p = POS.trains[no];
     if (!p) return null;
+    const dt = todayType();
+    const dl = delayOf(no) || 0;
+    const f = posFileMin();
+    /* 支線（6＝太宰府線／7＝甘木線、太宰府直通の急行）は先に支線で判定する。
+       支線の列車の row は本線の駅に読み替えられないため、本線の配置には使わない */
+    const bi = cmdBranchInfo(no, p, dt, f == null ? null : f + dl, dl);
+    if (bi) return bi;
     const idx = posIdxOf(p.row);
     if (idx == null || idx >= MAIN.length) return null;
-    const dt = todayType();
     const st = MAIN[idx];
     const prev = idx > 0 ? MAIN[idx - 1] : null;
     const next = idx < MAIN.length - 1 ? MAIN[idx + 1] : null;
-    const dl = delayOf(no) || 0;
-    const f = posFileMin();
     const sch = trainSched(dt, no);
     const pred = sch && f != null ? schedAt(sch, f + dl) : null;
     const at = !!(pred && pred.at && pred.name === st);
@@ -1199,6 +1315,8 @@
       frac: posFracOf(p.row, idx),
       dir: String(p.dir) === '2' ? 'down' : 'up',
       delay: dl, at, pred, done,
+      line: cmdLineOfNo(no) ? CMD_LINE_NAME[cmdLineOfNo(no)] : '',
+      lineHead: cmdLineOfNo(no) ? CMD_LINE_HEAD[cmdLineOfNo(no)] : '',
       type: p.type || rec.type || '', dest: p.dest || (rec.to ? canon(rec.to) : ''),
       cars: p.cars || '', doors: p.doors || '',
       where: at ? `${st} 停車中` : (prev && next ? `${prev}〜${next} 走行中` : `${st} 付近`),
@@ -1227,11 +1345,20 @@
       const pred = schedAt(sch, f);
       const nm = (pred && pred.name) || s0.name;
       const i0 = MAIN.indexOf(s0.name), i1 = MAIN.indexOf(s1.name);
-      const branch = cmdIsBranch(nm) || (i0 < 0 && i1 < 0);
-      const dir = i0 >= 0 && i1 >= 0 ? (i1 > i0 ? 'down' : 'up') : 'down';
+      /* 支線の判定：列番の頭数字（6＝太宰府線／7＝甘木線）で系統を決め、その支線の
+         区間内にいれば支線として扱う。6xxxは本線を走らないので、西鉄二日市にいても
+         「未在線（運休の可能性）」にしない。7xxxは本線区間にいれば未在線のまま */
+      const lineNo = cmdBranchOfNo(dt, no);
+      const bhit = lineNo ? cmdBranchPos(dt, no, f, sch) : null;
+      const branch = !!bhit || cmdIsBranch(nm) || (i0 < 0 && i1 < 0);
+      const bid = bhit ? bhit.bid : (cmdIsBranch(nm) ? CMD_BRANCH_OF[nm] : (i0 < 0 && i1 < 0 ? lineNo : null));
+      const dir = bhit ? (bhit.seg.ks[bhit.seg.i1] < bhit.seg.ks[bhit.seg.i0] ? 'up' : 'down')
+        : (i0 >= 0 && i1 >= 0 ? (i1 > i0 ? 'down' : 'up') : 'down');
       out.push({
         no, type: rec.type || '', from: s0.name, to: s1.name, start, end,
-        at: nm, branch, dir, dest: s1.name,
+        at: nm, branch, bid, bpos: bhit ? bhit.at.pos : null,
+        line: bid ? CMD_LINE_NAME[bid] : '', lineHead: bid ? CMD_LINE_HEAD[bid] : '',
+        dir, dest: s1.name,
         minLate: Math.max(0, Math.round(f - start)),
       });
     }
@@ -1347,10 +1474,17 @@
     const deads = cmdDeadheads(dt);
     const lost = ghosts.filter((g) => !g.branch);
     const onBranch = ghosts.filter((g) => g.branch);
+    /* 支線内にいる列車：公式在線で支線の線にいるもの（6xxx・支線区間の7xxx）と
+       在線情報に無い推定（ghosts）を合わせる。列番の頭数字 6＝太宰府線、7＝甘木線 */
+    const branchLive = live.filter((t) => t.branch);
+    const lineCount = {};
+    CMD_BRANCH.forEach((b) => { lineCount[b.id] = 0; });
+    live.forEach((t) => { if (t.branch) lineCount[t.branch] = (lineCount[t.branch] || 0) + 1; });
+    onBranch.forEach((g) => { if (g.bid) lineCount[g.bid] = (lineCount[g.bid] || 0) + 1; });
     let delayed = 0, maxDelay = 0;
     live.forEach((t) => { if (t.delay > 0) { delayed++; if (t.delay > maxDelay) maxDelay = t.delay; } });
     const stale = POS.status === 'ready' && Date.now() - POS.fetchedAt > 3 * 60 * 1000;
-    const val = { dt, live, ghosts, deads, lost, onBranch, delayed, maxDelay, stale, running: live.length };
+    const val = { dt, live, ghosts, deads, lost, onBranch, branchLive, lineCount, delayed, maxDelay, stale, running: live.length };
     CMD_DG = { key, val };
     return val;
   }
@@ -1555,11 +1689,18 @@
     const keep = tkbKeep(ros, CMD.filter);
     const items = [];
     dg.live.forEach((t) => {
+      if (t.branch) {
+        /* 支線内（6＝太宰府線・7＝甘木線）：チップは支線の線に置く。位置は時刻表から推定 */
+        const p = tkimgBranch(t.branch, t.bpos, t.dir === 'up');
+        items.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, kind: 'live', px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: !keep(t.no, t.delay, 'live') });
+        return;
+      }
       const pos = t.idx + ((t.frac == null ? 0.4 : t.frac) - 0.5) * 0.8;
       const p = tkimgMain(pos, t.dir);
       items.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, kind: 'live', dim: !keep(t.no, t.delay, 'live'), px0: p.x, py0: p.y, zone: p.zone, side: p.side });
     });
     dg.ghosts.forEach((g) => {
+      if (g.branch) return;                    // 支線内の推定は下の onBranch で置く
       const idx = MAIN.indexOf(g.at);
       if (idx < 0) return;
       const p = tkimgMain(idx, g.dir);
@@ -1576,18 +1717,24 @@
       items.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, kind: 'dead', where: t.where, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: !keep(t.no, 0, 'dead') });
     });
     const brt = cmdBranchTrains(dg.dt);
+    const placed = {};
+    items.forEach((it) => { placed[it.no] = 1; });
     CMD_BRANCH.forEach((b) => {
       (brt[b.id] || []).forEach((t) => {
+        if (placed[t.no]) return;              // 公式在線にある列車は上で置いている
+        placed[t.no] = 1;
         const upSide = b.order.indexOf(t.dest) === 0;
         const p = tkimgBranch(b.id, t.pos, upSide);
         items.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch', where: `${b.name}内（推定）`, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: CMD.filter === 'all' ? false : CMD.filter === 'roster' ? !ros.has(t.no) : true });
       });
     });
     (dg.onBranch || []).forEach((g) => {
-      const b = CMD_BRANCH.find((x) => x.order.indexOf(g.at) >= 0);
+      if (placed[g.no]) return;
+      placed[g.no] = 1;
+      const b = (g.bid && CMD_BRANCH.find((x) => x.id === g.bid)) || CMD_BRANCH.find((x) => x.order.indexOf(g.at) >= 0);
       if (!b) return;
-      const upSide = !(b.order.indexOf(g.dest) > 0);
-      const p = tkimgBranch(b.id, b.order.indexOf(g.at), upSide);
+      const bpos = g.bpos != null ? g.bpos : b.order.indexOf(g.at);
+      const p = tkimgBranch(b.id, bpos, g.dir === 'up');
       items.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, kind: 'ghost', where: `${g.at} 付近（支線内・推定）`, px0: p.x, py0: p.y, zone: p.zone, side: p.side, dim: !keep(g.no, 0, 'ghost') });
     });
     const zones = {};
@@ -1596,7 +1743,7 @@
     const chips = items.map(tkimgChipHTML).join('');
     const jumps = CMD_MAJOR.map((n) => `<button class="cjb" data-cmd-jump="${MAIN.indexOf(n)}">${esc(cmdName(n))}</button>`).join('');
     return `<div class="cmd-bhead">
-        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">配線略図に在線を重ねて表示／チップは線路の真上に小さく表示（上の線＝下り・下の線＝上り）／在線は駅ブロック単位・番線は特定しない（配線略図は貝塚線の段を除いて使用）</span>
+        <b>配線図ボード（天神大牟田線＋太宰府線・甘木線）</b><span class="cmd-note">列番6＝太宰府線・7＝甘木線（支線は時刻表から位置を推定）／上の線＝下り・下の線＝上り</span>
         <span class="cmd-zoom"><button data-cmd-zoom="-"${CMD.zoom <= CMD_ZOOM_STEPS[0] ? ' disabled' : ''}>−</button><button data-cmd-zoom="+"${CMD.zoom >= CMD_ZOOM_STEPS[CMD_ZOOM_STEPS.length - 1] ? ' disabled' : ''}>＋</button></span>
       </div>
       <div class="cmd-jump">${jumps}</div>
@@ -1633,8 +1780,16 @@
     const ros = rosterNos().set;
     const keep = tkbKeep(ros, CMD.filter);
     const list = [];
-    dg.live.forEach((t) => { if (t.idx === MAIN.indexOf(stn)) list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim: !keep(t.no, t.delay, 'live') }); });
-    dg.ghosts.forEach((g) => { if (g.at === stn) list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（在線情報になし・推定）`, dir: g.dir, kind: 'ghost', dim: !keep(g.no, 0, 'ghost') }); });
+    dg.live.forEach((t) => {
+      /* 西鉄二日市にいる列車：本線の列車と、太宰府線（列番6）で分岐駅にいる列車 */
+      if (t.branch === 'dz' ? !(t.bpos != null && t.bpos <= 0.4) : t.idx !== MAIN.indexOf(stn)) return;
+      list.push({ no: t.no, delay: t.delay, type: t.type, dest: t.dest, where: t.where, cars: t.cars, dir: t.dir, kind: 'live', dim: !keep(t.no, t.delay, 'live') });
+    });
+    dg.ghosts.forEach((g) => {
+      if (g.branch === 'dz') { if (!(g.bpos != null && g.bpos <= 0.4)) return; }
+      else if (g.at !== stn) return;
+      list.push({ no: g.no, delay: 0, type: g.type, dest: g.dest, where: `${g.at} 付近（${g.branch ? '支線内' : '在線情報になし'}・推定）`, dir: g.dir, kind: 'ghost', dim: !keep(g.no, 0, 'ghost') });
+    });
     (dg.deads || []).forEach((t) => { if (t.at === stn) list.push({ no: t.no, delay: 0, type: t.type, dest: t.dest, where: t.where, dir: t.dir, kind: 'dead', dim: !keep(t.no, 0, 'dead') }); });
     const trackOf = (it) => {
       const rec = trainRec(dg.dt, it.no);
@@ -1695,28 +1850,57 @@
       <p class="cmd-foot">配線図は raildiag 図番号1285「西日本鉄道(西鉄) 配線略図」（紺狐）を使用しています（貝塚線の段は切り取って除いています）。列車の位置は駅ブロック単位で図の線路上に重ねて表示しており、番線レベルの特定はしません。チップは線路の真上に小さく表示し、上の線が下り線・下の線が上り線です。遅延はチップ右上の小さな数字で示します。</p>`;
   }
 
-  function cmdBranchHTML(dt) {
-    const br = cmdBranchTrains(dt);
+  /* 支線（太宰府線・甘木線）のセクション：列番の頭数字 6＝太宰府線、7＝甘木線。
+     公式在線にある列車（6xxx・支線区間の7xxx・太宰府直通の急行）と、
+     時刻表から推定した列車を合わせて出す */
+  function cmdBranchHTML(dg) {
+    const dt = dg ? dg.dt : todayType();
+    const ros = rosterNos().set;
+    const keepB = (no, delay, kind) => (CMD.filter === 'all' ? true : CMD.filter === 'delay' ? delay > 0 : CMD.filter === 'lost' ? kind === 'ghost' : ros.has(no));
     const step = 54, pad = 34;
-    const n = CMD_BRANCH.reduce((a, b) => a + br[b.id].length, 0);
+    const byB = {};
+    CMD_BRANCH.forEach((b) => { byB[b.id] = []; });
+    const push = (bid, x) => {
+      if (!byB[bid] || byB[bid].some((y) => y.no === x.no)) return;
+      byB[bid].push(x);
+    };
+    (dg ? dg.live : []).forEach((t) => {
+      if (!t.branch) return;
+      push(t.branch, { no: t.no, pos: t.bpos == null ? 0 : t.bpos, delay: t.delay, type: t.type, dest: t.dest, kind: 'live',
+        where: t.where, dim: !keepB(t.no, t.delay, 'live') });
+    });
+    (dg ? dg.onBranch : []).forEach((g) => {
+      const bid = g.bid || CMD_BRANCH_OF[g.at];
+      const b = CMD_BRANCH.find((x) => x.id === bid);
+      if (!b) return;
+      push(b.id, { no: g.no, pos: g.bpos == null ? b.order.indexOf(g.at) : g.bpos, delay: 0, type: g.type, dest: g.dest, kind: 'ghost',
+        where: `${g.at} 付近（在線情報になし・推定）`, dim: !keepB(g.no, 0, 'ghost') });
+    });
+    const brt = cmdBranchTrains(dt);
+    CMD_BRANCH.forEach((b) => {
+      (brt[b.id] || []).forEach((t) => push(b.id, { no: t.no, pos: t.pos, delay: t.delay, type: t.type, dest: t.dest, kind: 'branch',
+        where: `${b.name}内（推定）`, dim: !keepB(t.no, t.delay, 'branch') }));
+    });
+    const n = CMD_BRANCH.reduce((a, b) => a + byB[b.id].length, 0);
     const body = CMD_BRANCH.map((b) => {
       const W = Math.round(pad * 2 + (b.order.length - 1) * step);
       const codes = b.order.map((n) => b.code[n] || '');
-      const items = br[b.id].map((t) => ({
+      const items = byB[b.id].map((t) => ({
         no: t.no, idx: Math.floor(t.pos), frac: t.pos - Math.floor(t.pos), col: 1,
-        delay: t.delay, type: t.type, kind: 'branch', dest: t.dest,
-        where: `${b.name}内（推定）`, dim: CMD.filter === 'lost',
+        delay: t.delay, type: t.type, kind: t.kind, dest: t.dest,
+        where: t.where, dim: t.dim,
       }));
+      const live = byB[b.id].filter((x) => x.kind === 'live').length;
       return `<div class="cmd-bhead sub sub2">
-          <b>${esc(b.name)}</b><span class="cmd-note">${esc(b.join)} 分岐・公式在線情報の対象外（時刻表から推定）</span>
+          <b>${esc(b.name)}</b><span class="cmd-note">列番${CMD_LINE_HEAD[b.id]}／${esc(b.join)} 分岐・いま${byB[b.id].length}本（うち公式在線 ${live}本・位置は時刻表から推定）</span>
         </div>
         <div class="cmdb branch">
           <div class="cmdb-lanes lane-up br">${cmdLanesHTML(items, step, pad)}</div>
           <div class="cmdb-rail" style="width:${W}px"><i class="rail-line single"></i>${cmdStationsHTML(b.order, codes, step, pad)}</div>
         </div>`;
     }).join('');
-    return `<details class="cmd-branch"${n ? ' open' : ''}>
-      <summary>支線（太宰府線・甘木線）<span>${n ? `${n}本 走行中・推定` : 'いま走行中の列車なし'}</span></summary>
+    return `<details class="cmd-branch">
+      <summary>支線（太宰府線・甘木線）<span>${n ? `${n}本 走行中` : 'いま走行中の列車なし'}</span></summary>
       ${body}
     </details>`;
   }
@@ -1726,12 +1910,14 @@
     const rows = [];
     dg.live.forEach((t) => rows.push({
       no: t.no, type: t.type, dest: t.dest, where: t.where, delay: t.delay, kind: 'live',
+      line: t.line || '',
       cars: esApplies(dg.dt) ? (esCarsOf(t.no) || {}) : null, roster: ros.set.has(t.no),
     }));
     dg.ghosts.forEach((g) => rows.push({
       no: g.no, type: g.type, dest: g.dest,
       where: g.branch ? `${g.at} 付近（支線内・推定）` : `${g.at} 付近（在線情報になし・推定）`,
       delay: 0, kind: 'ghost', branch: g.branch, cars: null, roster: ros.set.has(g.no),
+      line: g.line || '',
     }));
     (dg.deads || []).forEach((t) => rows.push({
       no: t.no, type: t.type, dest: t.dest, where: t.where,
@@ -1741,7 +1927,7 @@
       const rank = (r) => (r.kind === 'ghost' && !r.branch ? 0 : r.delay > 0 ? 1 : r.kind === 'dead' ? 3 : 2);
       return rank(a) - rank(b) || b.delay - a.delay || a.no.localeCompare(b.no);
     });
-    const shown = rows.filter((r) => filt === 'all' || (filt === 'delay' && r.delay > 0) || (filt === 'lost' && r.kind === 'ghost') || (filt === 'roster' && r.roster));
+    const shown = rows.filter((r) => filt === 'all' || (filt === 'delay' && r.delay > 0) || (filt === 'lost' && r.kind === 'ghost' && !r.branch) || (filt === 'roster' && r.roster));
     if (!shown.length) return '<p class="cmd-empty">該当する列車はありません。</p>';
     const LIMIT = 10;
     const cut = CMD.more ? shown : shown.slice(0, LIMIT);
@@ -1755,7 +1941,7 @@
         <span class="ty">${esc(typeShort(r.type))}</span>
         <span class="dest">${esc(SHORT[r.dest] || r.dest || '—')} 行</span>
         <span class="dl">${r.delay > 0 ? `+${r.delay}分` : r.kind === 'ghost' ? '未在線?' : r.kind === 'dead' ? '回送' : '定時'}</span>
-        <span class="sub"><span class="ps">${esc(r.where)}</span>${car ? `<span class="car">車 ${esc(car)}</span>` : ''}${r.roster ? '<span class="ros">輪番</span>' : ''}</span>
+        <span class="sub"><span class="ps">${esc(r.where)}</span>${r.line && !String(r.where || '').startsWith(r.line) ? `<span class="ln">${esc(r.line)}</span>` : ''}${car ? `<span class="car">車 ${esc(car)}</span>` : ''}${r.roster ? '<span class="ros">輪番</span>' : ''}</span>
       </button>`;
     }).join('')}</div>${moreBtn}`;
   }
@@ -1791,6 +1977,11 @@
         <div class="tile ${dg.maxDelay >= 5 ? 'warn' : ''}"><span>最大</span><b>${dg.maxDelay ? '+' + dg.maxDelay : '±0'}</b><i>分</i></div>
         <div class="tile ${dg.lost.length ? 'alert' : ''}"><span>未在線<em>推定</em></span><b>${dg.lost.length}</b><i>本</i></div>
       </div>
+      <div class="cmd-sum two">
+        <div class="tile ${dg.lineCount.dz ? 'on' : ''}"><span>太宰府線<em>列番6</em></span><b>${dg.lineCount.dz || 0}</b><i>本</i></div>
+        <div class="tile ${dg.lineCount.ag ? 'on' : ''}"><span>甘木線<em>列番7</em></span><b>${dg.lineCount.ag || 0}</b><i>本</i></div>
+      </div>
+      <p class="cmd-line-note">太宰府線・甘木線の本数は、いま支線内にいる列車（公式在線＋時刻表からの推定）。</p>
       ${loadBox}${errBox}${alert}
       <div class="cmd-filters">
         <button data-cmd-filter="all" class="${CMD.filter === 'all' ? 'on' : ''}">全列車 <b>${dg.running + dg.ghosts.length + (dg.deads || []).length}</b></button>
@@ -1799,6 +1990,7 @@
         <button data-cmd-filter="roster" class="${CMD.filter === 'roster' ? 'on' : ''}">輪番 <b>No.${esc(String((getPattern(state.pattern) || {}).no || ''))}</b></button>
       </div>
       ${cmdBoardHTML(dg)}
+      ${cmdBranchHTML(dg)}
       ${cmdTrackDetailsHTML(dg)}
       <div class="cmd-lhead"><b>在線・運転状況</b><span>${CMD.filter === 'roster' ? esc(ros.label) : CMD.filter === 'delay' ? '遅延のみ' : CMD.filter === 'lost' ? '未在線の推定のみ' : '全列車'}</span></div>
       ${cmdListHTML(dg)}
@@ -1806,7 +1998,7 @@
         <summary>位置・推定の見方</summary>
         <p>位置＝西鉄「列車走行位置」の在線情報（駅ブロック単位・数十秒〜数分前）。「停車中／走行中」は公式の位置と定刻（＋遅延）を突き合わせた<b>推定</b>です。</p>
         <p>破線＝在線情報に該当が無い列車（定刻上は運転中＝運休・運転見合わせ等の可能性、<b>推定</b>）。回送・基地内・運休のいずれかで、運休と断定はできません。</p>
-        <p>太宰府線・甘木線は公式の在線情報の対象外のため、時刻表から推定した位置を表示しています。公式の発表・駅の案内とあわせてご確認ください。</p>
+        <p>太宰府線・甘木線は公式の在線情報でも支線の線（別の列）にあり、位置の行（row）は本線の駅に読み替えられません。そのため列番の頭数字で系統を決め（<b>6＝太宰府線、7＝甘木線</b>）、時刻表の各駅時刻から位置を<b>推定</b>して表示しています。公式の発表・駅の案内とあわせてご確認ください。</p>
         <p>灰色＝回送列車。在線情報に載らないため、乗務データ（行路）の時刻から発駅→着駅を補間して位置を<b>推定</b>表示しています。勤務基準の時刻で、実際の運行とはずれることがあります。</p>
       </details>`;
   }
@@ -1881,13 +2073,29 @@
     const type = (live ? info.type : ghost ? ghost.type : rec ? rec.type : '') || '';
     const dest = (live ? info.dest : ghost ? ghost.dest : rec && canon(rec.to)) || '';
     const rows = [];
+    /* 線区（列番の頭数字 6＝太宰府線、7＝甘木線） */
+    const lineId = (live && info.branch) || (ghost && ghost.bid) || cmdLineOfNo(no);
+    if (lineId) {
+      const b = CMD_BRANCH.find((x) => x.id === lineId);
+      const ends = rec ? [canon(rec.from), canon(rec.to)].filter((n) => MAIN.indexOf(n) >= 0 && n !== b.join) : [];
+      rows.push(['線区', `${CMD_LINE_NAME[lineId]}（列番${CMD_LINE_HEAD[lineId]}・${esc(b.join)}分岐）${ends.length ? `・本線直通（${esc(ends[0])}）` : ''}`]);
+    }
     if (live) {
-      const seg = info.prev && info.next ? `${info.prev}〜${info.next}` : info.st;
-      rows.push(['現在位置', `${info.st} 付近（${seg} 間）・${info.at ? '停車中' : '走行中（推定）'}`]);
-      rows.push(['方向', info.dir === 'up' ? '上り ・ 天神方面' : '下り ・ 大牟田方面']);
-      if (info.cars) rows.push(['両数', `${info.cars}両${info.doors ? ` ・ ${info.doors}ドア` : ''}`]);
+      if (info.branch) {
+        const b = CMD_BRANCH.find((x) => x.id === info.branch);
+        const seg = info.at ? info.st : `${info.prev}〜${info.next}`;
+        rows.push(['現在位置', `${seg}${info.at ? ' 停車中' : ' 走行中'}（${esc(b.name)}内・位置は時刻表から推定）`]);
+        rows.push(['方向', info.dir === 'up' ? `上り ・ ${esc(b.join)}（天神）方面` : `下り ・ ${esc(CMD_LINE_TERM[b.id])}方面`]);
+        if (info.cars) rows.push(['両数', `${info.cars}両${info.doors ? ` ・ ${info.doors}ドア` : ''}`]);
+      } else {
+        const seg = info.prev && info.next ? `${info.prev}〜${info.next}` : info.st;
+        rows.push(['現在位置', `${info.st} 付近（${seg} 間）・${info.at ? '停車中' : '走行中（推定）'}`]);
+        rows.push(['方向', info.dir === 'up' ? '上り ・ 天神方面' : '下り ・ 大牟田方面']);
+        if (info.cars) rows.push(['両数', `${info.cars}両${info.doors ? ` ・ ${info.doors}ドア` : ''}`]);
+      }
     } else if (ghost) {
-      rows.push(['状態', ghost.branch ? `支線内（${ghost.at} 付近・推定）` : '在線情報に該当なし（運休・見合わせ等の可能性／推定）']);
+      const gl = ghost.bid ? CMD_LINE_NAME[ghost.bid] : '';
+      rows.push(['状態', ghost.branch ? `${gl ? gl + '内' : '支線内'}（${ghost.at} 付近・推定）` : '在線情報に該当なし（運休・見合わせ等の可能性／推定）']);
       rows.push(['定刻', `${fmtMin(ghost.start)} ${ghost.from} → ${fmtMin(ghost.end)} ${ghost.to}`]);
       rows.push(['運転開始から', `${ghost.minLate}分経過`]);
     } else {
@@ -1944,7 +2152,10 @@
     render();
     setTimeout(() => {
       const info = cmdInfo(no);
-      if (info) cmdScrollToIdx(info.idx);
+      if (info) {
+        if (info.branch) cmdScrollToBranch(info.branch, info.bpos);
+        else cmdScrollToIdx(info.idx);
+      }
       const chip = document.querySelector(`[data-cmd-train="${no}"]`);
       if (chip) chip.classList.add('sel');
       openCmdTrain(no);
@@ -1953,6 +2164,24 @@
   function cmdJumpTo(idx) {
     if (idx == null || idx < 0) return;
     cmdScrollToIdx(idx);
+  }
+  /* 支線（太宰府線・甘木線）の列車へボードを寄せる */
+  function cmdScrollToBranch(bid, pos) {
+    const box = document.querySelector('#cmdImgBox');
+    if (!box) return;
+    const p = tkimgBranch(bid, pos == null ? 0 : pos, false);
+    const inner = box.querySelector('.tkb-img-inner');
+    const iw = inner ? inner.offsetWidth : 0;
+    if (iw > 0) {
+      box.scrollLeft = Math.max(0, (p.x / TKIMG_W) * iw - box.clientWidth / 2);
+      CMD.scroll = box.scrollLeft;
+    }
+    const wrap = box.querySelector('.tkb-img-wrap');
+    if (wrap && wrap.getBoundingClientRect) {
+      const r = wrap.getBoundingClientRect();
+      const y = r.top + (window.scrollY || 0) + (p.y / TKIMG_H) * r.height - (window.innerHeight || 0) / 2;
+      if (isFinite(y)) window.scrollTo(0, Math.max(0, y));
+    }
   }
 
   /* ================= ROSTER ================= */
@@ -2374,7 +2603,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v39';
+    s.src = 'stops.js?v40';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;

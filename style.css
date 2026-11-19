@@ -690,6 +690,12 @@ html[data-theme="light"] .rail-row.branch { color: #2f5fd0; }
 .cmd-sum .tile i { font-style: normal; font-size: 8.5px; color: var(--c-fg3); margin-left: 1px; }
 .cmd-sum .tile.warn b { color: var(--c-late); }
 .cmd-sum .tile.alert b { color: var(--c-lost); }
+/* 支線（列番6＝太宰府線・7＝甘木線）の本数 */
+.cmd-sum.two { grid-template-columns: repeat(2, 1fr); margin-top: 6px; }
+.cmd-sum.two .tile { padding: 7px 10px; }
+.cmd-sum.two .tile b { font-size: 16px; }
+.cmd-sum.two .tile span em { background: #14293a; color: #8fd0ff; }
+.cmd-line-note { margin: 5px 0 0; font-size: 9px; color: var(--c-fg3); line-height: 1.4; }
 
 .cmd-alert {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 8px;
@@ -805,6 +811,7 @@ html[data-theme="light"] .rail-row.branch { color: #2f5fd0; }
 .cmd-row .sub .ps { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmd-row .sub .car { color: #7fb2d6; font-variant-numeric: tabular-nums; }
 .cmd-row .sub .ros { color: #e0a13c; font-weight: 800; }
+.cmd-row .sub .ln { flex: 0 0 auto; font-weight: 800; font-size: 8.5px; padding: 0 4px; border-radius: 4px; background: #10283a; color: #8fd0ff; border: 1px solid #23415a; }
 .cmd-empty { font-size: 11px; color: var(--c-fg3); padding: 8px 0; }
 .cmd > .cmd-note, .cmd .cmd-foot { display: block; margin-top: 12px; font-size: 9px; line-height: 1.6; color: #5f7488; }
 
