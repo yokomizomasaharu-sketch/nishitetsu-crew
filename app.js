@@ -1479,8 +1479,17 @@
     const branchLive = live.filter((t) => t.branch);
     const lineCount = {};
     CMD_BRANCH.forEach((b) => { lineCount[b.id] = 0; });
-    live.forEach((t) => { if (t.branch) lineCount[t.branch] = (lineCount[t.branch] || 0) + 1; });
-    onBranch.forEach((g) => { if (g.bid) lineCount[g.bid] = (lineCount[g.bid] || 0) + 1; });
+    const seenLine = {};
+    const countLine = (bid, no) => {
+      if (!bid || seenLine[no]) return;
+      seenLine[no] = 1;
+      lineCount[bid] = (lineCount[bid] || 0) + 1;
+    };
+    live.forEach((t) => { if (t.branch) countLine(t.branch, t.no); });
+    onBranch.forEach((g) => countLine(g.bid, g.no));
+    /* 在線情報に全く載っていない支線の列車（始発直後など）も本数に入れる */
+    const brtC = cmdBranchTrains(dt);
+    CMD_BRANCH.forEach((b) => { (brtC[b.id] || []).forEach((t) => countLine(b.id, t.no)); });
     let delayed = 0, maxDelay = 0;
     live.forEach((t) => { if (t.delay > 0) { delayed++; if (t.delay > maxDelay) maxDelay = t.delay; } });
     const stale = POS.status === 'ready' && Date.now() - POS.fetchedAt > 3 * 60 * 1000;
@@ -2603,7 +2612,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v41';
+    s.src = 'stops.js?v42';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
