@@ -1089,6 +1089,7 @@
     scroll: 0,
     sel: null,
     more: false,
+    branchOpen: false,      // 支線セクションの開閉（自動更新で閉じないよう覚えておく）
     auto: localStorage.getItem('cmd:auto') !== '0',
   };
   const CMD_ZOOM_STEPS = [100, 160, 230];
@@ -1908,7 +1909,7 @@
           <div class="cmdb-rail" style="width:${W}px"><i class="rail-line single"></i>${cmdStationsHTML(b.order, codes, step, pad)}</div>
         </div>`;
     }).join('');
-    return `<details class="cmd-branch">
+    return `<details class="cmd-branch"${CMD.branchOpen ? ' open' : ''}>
       <summary>支線（太宰府線・甘木線）<span>${n ? `${n}本 走行中` : 'いま走行中の列車なし'}</span></summary>
       ${body}
     </details>`;
@@ -2612,7 +2613,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v42';
+    s.src = 'stops.js?v43';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
@@ -3454,6 +3455,9 @@
     const j = e.target.closest('[data-cmd-jump]');
     if (j) { cmdJumpTo(+j.dataset.cmdJump); return; }
     if (e.target.closest('[data-cmd-more]')) { CMD.more = !CMD.more; paintCmd(); return; }
+    /* 支線セクションは自動更新で閉じないよう、開閉を覚えておく */
+    const bs = e.target.closest('.cmd-branch > summary');
+    if (bs) { setTimeout(() => { const d = bs.parentElement; if (d) CMD.branchOpen = !!d.open; }, 0); return; }
   });
 
   const savedTheme = localStorage.getItem('theme');
