@@ -735,6 +735,344 @@
     else posFetch(true);
   }
 
+  /* ================= 公式運行情報（西鉄公式X・公式ページ） =================
+     147.98MHz の指令無線を常時受信する運用は、電波法と受信環境の面でできない。
+     代わりに西鉄公式が発表している運行情報を取得して、指令タブと行路（1日の流れ・
+     タイムライン・ダイヤ）に反映する。
+       ・公式X @nishitetsu_info … 列車が20分以上遅延する場合・運転見合わせ等のお知らせ
+       ・公式 遅延証明書（www.nnr.co.jp/train/chien/）… 5分以上の遅延を時間帯別に掲載
+       ・公式 運行状況（jik.nishitetsu.jp/traffic/）… 電車・バスの運行状況
+     公式サイトは CORS を返さないため、中継（r.jina.ai）経由で本文を読む（在線位置と同じ）。
+     取得できないときは「未取得」と明示して公式へのリンクを出す。推測で埋めない。
+     在線データからの推定（遅延5分以上・未在線3本以上）は別枠の「推定」として扱う。
+     ===================================================================== */
+  const OFF = {
+    X: 'https://x.com/nishitetsu_info',
+    CHIEN: 'https://www.nnr.co.jp/train/chien/',
+    JIK: 'https://jik.nishitetsu.jp/traffic/default.htm',
+    KEY: 'off:nishitetsu:v1',
+    RELAY: (u) => 'https://r.jina.ai/' + u,
+    TTL: { x: 55 * 1000, chien: 120 * 1000, jik: 180 * 1000 },
+    x: { status: 'idle', at: 0, posts: [], error: '', failed: false },
+    chien: { status: 'idle', at: 0, day: '', rows: [], error: '', failed: false },
+    jik: { status: 'idle', at: 0, text: '', secs: [], error: '', failed: false },
+  };
+
+  const offHM = (ts) => {
+    const d = new Date(ts);
+    return `${esPad(d.getHours())}:${esPad(d.getMinutes())}`;
+  };
+  /* 日付は4時で切り替わる（在線・えれサイトと同じ扱い） */
+  function offToday() {
+    const d = new Date();
+    if (d.getHours() < 4) d.setDate(d.getDate() - 1);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+  function offClean(s) {
+    return String(s == null ? '' : s)
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[>#`]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  function offAgeLbl(label) {
+    const m = String(label || '').trim().match(/^(\d+)\s*([mhd])$/i);
+    if (!m) return null;
+    const n = +m[1], u = m[2].toLowerCase();
+    return u === 'm' ? n : u === 'h' ? n * 60 : n * 1440;
+  }
+  async function offRelay(url) {
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), 18000);
+    try {
+      const res = await fetch(OFF.RELAY(url), { cache: 'no-store', credentials: 'omit', signal: ctl.signal });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.text();
+    } finally { clearTimeout(tm); }
+  }
+  /* 公式Xの公開ページ（中継で読んだ本文）から投稿を抜く */
+  function offParseX(md) {
+    const text = String(md || '');
+    const out = [];
+    const blocks = text.split(/\[\]\(https:\/\/x\.com\/compose\/post\?in_reply_to=\d+\)/);
+    for (const b of blocks) {
+      const ids = [...b.matchAll(/https:\/\/x\.com\/nishitetsu_info\/status\/(\d+)\)/g)];
+      if (!ids.length) continue;
+      const last = ids[ids.length - 1];
+      const id = last[1];
+      const body = offClean(b.slice(last.index + last[0].length));
+      if (!body || body.length < 4) continue;
+      const labels = [...b.matchAll(new RegExp('\\[([^\\]]*)\\]\\(https://x\\.com/nishitetsu_info/status/' + id + '\\)', 'g'))]
+        .map((m) => m[1]).filter(Boolean);
+      out.push({ id, label: labels.length ? labels[labels.length - 1] : '', body });
+    }
+    const seen = {};
+    return out.filter((p) => (seen[p.id] ? false : (seen[p.id] = 1)));
+  }
+  /* 公式 遅延証明書の表（日付ごと・時間帯ごと） */
+  function offParseChien(md) {
+    const lines = String(md || '').split(/\r?\n/);
+    let day = '';
+    const byDay = {};
+    for (const raw of lines) {
+      const s = raw.trim();
+      const dh = s.match(/^\|\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*\|/);
+      if (dh) { day = `${+dh[2]}/${+dh[3]}`; byDay[day] = []; continue; }
+      const rm = s.match(/^\|([^|]+)\|([^|]+)\|$/);
+      if (!rm || !day) continue;
+      const band = offClean(rm[1]);
+      const val = offClean(rm[2]);
+      if (!band || band === '---') continue;
+      const mm = val.match(/(\d+)\s*分の遅延/);
+      byDay[day].push({ band, text: val, min: mm ? +mm[1] : 0 });
+    }
+    const today = offToday();
+    return { day: today, rows: byDay[today] || [], days: byDay };
+  }
+  /* 公式 運行状況ページ（見出しごとの本文） */
+  function offParseJik(md) {
+    const text = String(md || '');
+    const i = text.indexOf('Markdown Content');
+    const body = i >= 0 ? text.slice(i) : text;
+    const secs = [];
+    for (const part of body.split(/^#{2,4}\s*/m)) {
+      const nl = part.indexOf('\n');
+      if (nl < 0) continue;
+      const title = offClean(part.slice(0, nl));
+      let txt = offClean(part.slice(nl + 1));
+      const cut = txt.indexOf('以下のサイトから');
+      if (cut >= 0) txt = txt.slice(0, cut).trim();
+      if (!title || !txt || txt.length < 4) continue;
+      if (!/高速バス|電車|列車|運行/.test(title)) continue;
+      secs.push({ title, text: txt.slice(0, 400) });
+    }
+    return secs;
+  }
+
+  async function offFetchX(force) {
+    if (!force && (OFF.x.status === 'loading' || (OFF.x.at && Date.now() - OFF.x.at < OFF.TTL.x))) return;
+    OFF.x.status = 'loading';
+    try {
+      const md = await offRelay(OFF.X);
+      const posts = offParseX(md);
+      if (!posts.length) throw new Error('投稿を読めませんでした');
+      OFF.x.posts = posts.slice(0, 12);
+      OFF.x.at = Date.now(); OFF.x.status = 'ready'; OFF.x.error = ''; OFF.x.failed = false;
+    } catch (e) {
+      OFF.x.failed = true;
+      OFF.x.error = /HTTP 4\d\d/.test(String((e && e.message) || '')) ? '中継の回数制限で取得できませんでした' : '公式Xを取得できません';
+      OFF.x.status = OFF.x.posts.length ? 'ready' : 'error';
+    }
+    offSave(); offRepaint();
+  }
+  async function offFetchChien(force) {
+    if (!force && (OFF.chien.status === 'loading' || (OFF.chien.at && Date.now() - OFF.chien.at < OFF.TTL.chien))) return;
+    OFF.chien.status = 'loading';
+    try {
+      const md = await offRelay(OFF.CHIEN);
+      const d = offParseChien(md);
+      if (!d.rows.length && !Object.keys(d.days).length) throw new Error('表を読めませんでした');
+      OFF.chien.day = d.day; OFF.chien.rows = d.rows;
+      OFF.chien.at = Date.now(); OFF.chien.status = 'ready'; OFF.chien.error = ''; OFF.chien.failed = false;
+    } catch (e) {
+      OFF.chien.failed = true;
+      OFF.chien.error = '遅延証明書を取得できません';
+      OFF.chien.status = OFF.chien.rows.length ? 'ready' : 'error';
+    }
+    offSave(); offRepaint();
+  }
+  async function offFetchJik(force) {
+    if (!force && (OFF.jik.status === 'loading' || (OFF.jik.at && Date.now() - OFF.jik.at < OFF.TTL.jik))) return;
+    OFF.jik.status = 'loading';
+    try {
+      const md = await offRelay(OFF.JIK);
+      const secs = offParseJik(md);
+      OFF.jik.secs = secs;
+      OFF.jik.text = secs.map((s) => `${s.title}：${s.text}`).join(' ／ ').slice(0, 800);
+      OFF.jik.at = Date.now(); OFF.jik.status = 'ready'; OFF.jik.error = ''; OFF.jik.failed = false;
+    } catch (e) {
+      OFF.jik.failed = true;
+      OFF.jik.error = '運行状況ページを取得できません';
+      OFF.jik.status = OFF.jik.text ? 'ready' : 'error';
+    }
+    offSave(); offRepaint();
+  }
+  function offFetchAll(force) {
+    offFetchX(force);
+    offFetchChien(force);
+    offFetchJik(force);
+  }
+  function offLoad() {
+    try {
+      const raw = localStorage.getItem(OFF.KEY);
+      if (!raw) return;
+      const c = JSON.parse(raw) || {};
+      if (c.x && c.x.at && Array.isArray(c.x.posts) && c.x.posts.length) {
+        OFF.x = { status: 'ready', at: c.x.at, posts: c.x.posts, error: '', failed: false };
+      }
+      if (c.chien && c.chien.at) {
+        OFF.chien = { status: 'ready', at: c.chien.at, day: c.chien.day || '', rows: c.chien.rows || [], error: '', failed: false };
+      }
+      if (c.jik && c.jik.at) {
+        OFF.jik = { status: 'ready', at: c.jik.at, text: c.jik.text || '', secs: c.jik.secs || [], error: '', failed: false };
+      }
+    } catch (e) { /* 無視 */ }
+  }
+  function offSave() {
+    try {
+      localStorage.setItem(OFF.KEY, JSON.stringify({
+        x: { at: OFF.x.at, posts: OFF.x.posts },
+        chien: { at: OFF.chien.at, day: OFF.chien.day, rows: OFF.chien.rows },
+        jik: { at: OFF.jik.at, text: OFF.jik.text, secs: OFF.jik.secs },
+      }));
+    } catch (e) { /* 無視 */ }
+  }
+
+  const OFF_OK = /(運転を再開|運転再開|通常どおり|平常どおり|通常運転|平常運転)/;
+  const OFF_NG = /(運転を見合わせ|見合わせ|運転中止|運休|取りやめ|遅れ|遅延|人身|事故|信号|架線|車両故障|車両点検|徐行|折り返し運転|一部列車|乱れ|直通)/;
+  /* 投稿に線区・区分・時刻を付ける（新しい順のまま） */
+  function offPosts() {
+    return OFF.x.posts.map((p) => {
+      const b = String(p.body || '');
+      const kind = OFF_OK.test(b) ? 'normal' : OFF_NG.test(b) ? 'abnormal' : 'info';
+      const d = b.match(/(\d{1,2})月(\d{1,2})日(\d{1,2})時/);
+      const atLabel = d ? `${d[1]}月${d[2]}日${d[3]}時 現在` : '';
+      let ageMin = offAgeLbl(p.label);
+      if (d) {
+        const now = new Date();
+        let t = new Date(now.getFullYear(), +d[1] - 1, +d[2], +d[3], 0, 0);
+        if (t.getTime() - now.getTime() > 3 * 3600e3) t = new Date(t.getTime() - 86400e3);
+        ageMin = Math.round((now.getTime() - t.getTime()) / 60000);
+      }
+      const line = /天神大牟田線|太宰府線|甘木線/.test(b) ? 'tmm' : /貝塚線/.test(b) ? 'kzk' : '';
+      return { id: p.id, label: p.label, body: b, kind, atLabel, ageMin, line };
+    });
+  }
+  /* 公式の状態をひとつにまとめる（公式X → 遅延証明書 の順に新しい事実を採る） */
+  function offDigest() {
+    const posts = offPosts();
+    const pick = (ln) => posts.find((p) => p.line === ln) || null;
+    const tmm = pick('tmm'), kzk = pick('kzk');
+    const rows = OFF.chien.day === offToday() ? (OFF.chien.rows || []) : [];
+    const dely = rows.filter((r) => r.min >= 5);
+    const cur = rows.length ? rows[rows.length - 1] : null;
+    const dg = posDigest();
+    const est = !!(dg && (dg.maxDelay >= 5 || dg.missing >= 3));
+    const recent = (p) => !!(p && p.ageMin != null && p.ageMin <= 360);
+    const live = (p) => !!(p && p.kind === 'abnormal' && recent(p));
+    let level = 'unknown', head = '公式の運行情報：未取得', body = 'タップすると公式Xの取得を試みます。', when = '', src = '', srcTime = '';
+    if (live(tmm) || live(kzk)) {
+      const p = live(tmm) ? tmm : kzk;
+      level = 'alert';
+      head = `${p.line === 'kzk' ? '貝塚線' : '天神大牟田線'}：運行異常のお知らせ`;
+      body = p.body;
+      when = p.atLabel || (p.label ? `${p.label}前` : '');
+      src = '公式X @nishitetsu_info'; srcTime = OFF.x.at ? offHM(OFF.x.at) : '';
+    } else if (cur && cur.min >= 5) {
+      level = 'delay';
+      head = `本日 ${cur.min}分の遅延（公式 遅延証明書）`;
+      body = `${cur.band}の時間帯に${cur.min}分の遅延が記録されています。${tmm ? `（公式Xの最新：${tmm.atLabel || '最新'} ${tmm.body}）` : ''}`;
+      when = cur.band;
+      src = '公式 遅延証明書'; srcTime = OFF.chien.at ? offHM(OFF.chien.at) : '';
+    } else if (tmm && tmm.kind === 'normal' && recent(tmm)) {
+      level = 'normal';
+      head = /再開/.test(tmm.body) ? '運転を再開' : '平常運転';
+      body = tmm.body;
+      when = tmm.atLabel || '';
+      src = '公式X @nishitetsu_info'; srcTime = OFF.x.at ? offHM(OFF.x.at) : '';
+    } else if (rows.length) {
+      level = 'normal';
+      head = '本日ここまで5分以上の遅延なし';
+      body = tmm ? `公式Xの最新：${tmm.atLabel || ''} ${tmm.body}` : '公式Xの新しい発表はありません。';
+      src = '公式 遅延証明書'; srcTime = OFF.chien.at ? offHM(OFF.chien.at) : '';
+    }
+    return { posts, tmm, kzk, rows, dely, cur, level, head, body, when, src, srcTime, est, dg };
+  }
+
+  /* 指令タブ上部の常設バナー */
+  function offBannerHTML() {
+    const g = offDigest();
+    const ng = OFF.x.failed ? `<em class="ob-ng">更新できませんでした</em>` : '';
+    const srcTxt = g.src ? `出典：${esc(g.src)}${g.srcTime ? `（${esc(g.srcTime)}取得）` : ''}` : '出典：西鉄公式（未取得）';
+    return `<div class="offb ${g.level}">
+        <button class="offb-main" type="button" data-off-detail>
+          <span class="ob-tag">公式</span>
+          <span class="ob-head"><b>${esc(g.head)}</b>${g.when ? `<em>${esc(g.when)}</em>` : ''}</span>
+          <span class="ob-body">${esc(g.body)}</span>
+          <span class="ob-src">${srcTxt}${ng}</span>
+        </button>
+        <div class="ob-links">
+          <a href="${OFF.X}" target="_blank" rel="noopener noreferrer">公式X</a>
+          <a href="${OFF.CHIEN}" target="_blank" rel="noopener noreferrer">遅延証明書</a>
+          <button type="button" data-off-refresh>更新</button>
+        </div>
+      </div>${g.est ? `<div class="offb-est"><b>推定</b>在線データでは遅延 最大${g.dg.maxDelay}分・未在線 ${g.dg.missing}本（公式発表ではありません）</div>` : ''}`;
+  }
+  /* 行路・ダイヤ用の1行ストリップ */
+  function offStripHTML() {
+    const g = offDigest();
+    const t = g.level === 'unknown'
+      ? '公式の運行情報はまだ取得していません（タップで取得）'
+      : `${g.head}${g.when ? `・${g.when}` : ''}`;
+    const sub = (g.level === 'alert' || g.level === 'delay') ? g.body : '';
+    const est = g.est && g.level !== 'alert' ? `在線推定 +${g.dg.maxDelay}分` : '';
+    return `<button class="off-strip ${g.level}" type="button" data-off-detail>
+        <span class="os-tag">${g.level === 'alert' || g.level === 'delay' ? '⚠ 公式' : '公式'}</span>
+        <span class="os-text"><b>${esc(t)}</b>${sub ? `<i>${esc(sub)}</i>` : ''}${est ? `<i>${esc(est)}</i>` : ''}</span>
+        <span class="os-go">›</span>
+      </button>`;
+  }
+  function offRepaint() {
+    const b = $('#offBanner');
+    if (b) b.innerHTML = offBannerHTML();
+    $$('.off-strip').forEach((el) => { el.outerHTML = offStripHTML(); });
+  }
+  /* 公式の内訳（出典ごとに分けて表示） */
+  function openOffDetail() {
+    const g = offDigest();
+    const posts = g.posts.slice(0, 6);
+    const lineName = (l) => (l === 'tmm' ? '天神大牟田線' : l === 'kzk' ? '貝塚線' : 'お知らせ');
+    const postHTML = posts.length
+      ? posts.map((p) => `<div class="off-post ${p.kind}">
+          <div class="op-h"><span>${esc(lineName(p.line))}</span><em>${esc(p.atLabel || (p.label ? p.label + '前' : ''))}</em></div>
+          <p>${esc(p.body)}</p></div>`).join('')
+      : `<p class="empty">${OFF.x.status === 'loading' ? '取得中…' : '公式Xを取得できていません。'}</p>`;
+    const chienHTML = g.rows.length
+      ? `<div class="off-tbl">${g.rows.map((r) => `<div class="otr ${r.min >= 5 ? 'warn' : ''}"><span>${esc(r.band)}</span><b>${r.min >= 5 ? `${r.min}分の遅延` : '遅延なし'}</b></div>`).join('')}</div>`
+      : `<p class="empty">${OFF.chien.status === 'loading' ? '取得中…' : '本日の掲載はまだありません。'}</p>`;
+    const jikHTML = (OFF.jik.secs && OFF.jik.secs.length)
+      ? OFF.jik.secs.map((s) => `<div class="off-sec"><b>${esc(s.title)}</b><p>${esc(s.text)}</p></div>`).join('')
+      : `<p class="empty">${OFF.jik.status === 'loading' ? '取得中…' : '取得できていません。'}</p>`;
+    showSheet(`<div class="sheet-head"><h2>西鉄公式 運行情報</h2><button class="sheet-close" data-close>✕</button></div>
+      <div class="off-detail">
+        <div class="off-hero ${g.level}"><b>${esc(g.head)}</b><span>${esc(g.body)}</span></div>
+        <div class="btn-row">
+          <button class="btn primary" data-off-reload>再取得</button>
+          <a class="btn" href="${OFF.X}" target="_blank" rel="noopener noreferrer">公式X</a>
+          <a class="btn" href="${OFF.CHIEN}" target="_blank" rel="noopener noreferrer">遅延証明書</a>
+          <a class="btn" href="${OFF.JIK}" target="_blank" rel="noopener noreferrer">運行状況</a>
+        </div>
+        <h4 class="tl-title">公式X @nishitetsu_info<span class="off-when">${OFF.x.at ? `${esc(esClock(OFF.x.at))} 取得` : '未取得'}${OFF.x.failed ? '・更新できませんでした' : ''}</span></h4>
+        <p class="off-note">西鉄電車の運行情報の公式アカウントです（列車が20分以上遅延する場合等に発表）。</p>
+        <div class="off-posts">${postHTML}</div>
+        <h4 class="tl-title">公式 遅延証明書（本日・5分以上）<span class="off-when">${OFF.chien.at ? `${esc(esClock(OFF.chien.at))} 取得` : '未取得'}</span></h4>
+        ${chienHTML}
+        <h4 class="tl-title">公式 運行状況<span class="off-when">${OFF.jik.at ? `${esc(esClock(OFF.jik.at))} 取得` : '未取得'}</span></h4>
+        ${jikHTML}
+        <h4 class="tl-title">在線データからの推定</h4>
+        ${g.dg ? `<p class="off-note">在線 ${g.dg.running}本 ・ 遅延 ${g.dg.delayed}本${g.dg.maxDelay ? `（最大 ${g.dg.maxDelay}分）` : ''} ・ 未在線 ${g.dg.missing}本。公式発表ではなく、在線位置と定刻の突き合わせによる推定です。</p>` : '<p class="empty">在線データを取得していません。</p>'}
+        <p class="es-caution">公式サイトは CORS の制限で直接読めないため、中継サービス（r.jina.ai）経由で本文を取得しています。取得できないときは「未取得」と表示し、公式ページへのリンクを出しています。遅延証明書は5分以上の遅延のみ・時間帯単位の掲載です。乗務前は公式の発表と駅の案内でご確認ください。</p>
+      </div>`, () => {
+      const rb = $('#sheetBody [data-off-reload]');
+      if (rb) rb.addEventListener('click', async () => {
+        rb.disabled = true; rb.textContent = '取得中…';
+        await Promise.all([offFetchX(true), offFetchChien(true), offFetchJik(true)]);
+        openOffDetail();
+      });
+    });
+  }
+
   /* ================= 指令室（運行管理卓） =================
      西鉄「列車走行位置」（busnavi-railway.nnr.co.jp）の在線情報を、駅ブロック単位の
      位置として路線ボード（指令室）に並べ、列番・種別・行先・遅延・車号・行路を連携する。
@@ -1431,7 +1769,7 @@
     const gen = ft.length >= 12 ? `${ft.slice(8, 10)}:${ft.slice(10, 12)}:${ft.slice(12, 14)}` : '—';
     const stale = dg.stale ? `<span class="cmd-stale">情報が更新されていません</span>` : '';
     const alert = ok && (dg.maxDelay >= 5 || dg.lost.length >= 3)
-      ? `<div class="cmd-alert"><b>⚠ 運行異常の可能性</b><span>${dg.maxDelay >= 5 ? `遅延 ${dg.delayed}本（最大 ${dg.maxDelay}分）` : ''}${dg.maxDelay >= 5 && dg.lost.length >= 3 ? ' ／ ' : ''}${dg.lost.length >= 3 ? `在線情報にない列車 ${dg.lost.length}本` : ''}</span>
+      ? `<div class="cmd-alert"><b>⚠ 在線データからの推定（公式発表ではありません）</b><span>${dg.maxDelay >= 5 ? `遅延 ${dg.delayed}本（最大 ${dg.maxDelay}分）` : ''}${dg.maxDelay >= 5 && dg.lost.length >= 3 ? ' ／ ' : ''}${dg.lost.length >= 3 ? `在線情報にない列車 ${dg.lost.length}本` : ''}</span>
           <a href="${POS.SITE}" target="_blank" rel="noopener noreferrer">公式の在線位置</a><a href="${POS.X}" target="_blank" rel="noopener noreferrer">西鉄公式X</a></div>`
       : '';
     const errBox = POS.status === 'error'
@@ -1481,6 +1819,7 @@
           <button class="cmd-btn ${CMD.auto ? 'on' : ''}" data-cmd-auto aria-label="自動更新">自動</button>
         </div>
       </div>
+      <div id="offBanner">${offBannerHTML()}</div>
       <div id="cmdLive">${cmdLiveHTML()}</div>
     </section>`;
     bindCmdScroll(CMD.scroll);
@@ -1491,6 +1830,8 @@
     if (!live) return;
     const saved = $$('#cmdLive .cmdb').map((b) => b.scrollLeft);
     live.innerHTML = cmdLiveHTML();
+    const ob = $('#offBanner');
+    if (ob) ob.innerHTML = offBannerHTML();
     bindCmdScroll(saved);
     updateCmdClock();
   }
@@ -1815,7 +2156,7 @@
     const diaWarn = (ES.status === 'ready' && ES.diaType !== dt)
       ? `<p class="es-note warn-dia">今日は${ES.diaType === 'holiday' ? '土日祝' : '平日'}ダイヤのため、${dt === 'holiday' ? '土日祝' : '平日'}の車号（編成番号）は表示していません。形式・両数は編成両数表の情報です。</p>`
       : '';
-    return `<h4 class="tl-title">乗務タイムライン</h4>
+    return `${offStripHTML()}<h4 class="tl-title">乗務タイムライン</h4>
       ${diaWarn}
       ${renderTimeline(d, dt)}
       <div class="btn-row tight">
@@ -1990,7 +2331,7 @@
     let html = `<div class="seg" id="dayTypeSeg">
         <button data-t="weekday" class="${state.dayType === 'weekday' ? 'on' : ''}">平日</button>
         <button data-t="holiday" class="${state.dayType === 'holiday' ? 'on' : ''}">土日祝</button>
-      </div>`;
+      </div>${offStripHTML()}`;
     for (const p of pats) {
       const ws = workDays(p);
       html += `<section class="week">
@@ -2033,7 +2374,7 @@
     if (STOPS.status !== 'idle') return;
     STOPS.status = 'loading';
     const s = document.createElement('script');
-    s.src = 'stops.js?v26';
+    s.src = 'stops.js?v35';
     s.async = true;
     s.onload = () => {
       STOPS.data = window.APP_STOPS || null;
@@ -2083,6 +2424,7 @@
         <button data-t="weekday" class="${state.dayType === 'weekday' ? 'on' : ''}">平日</button>
         <button data-t="holiday" class="${state.dayType === 'holiday' ? 'on' : ''}">土日祝</button>
       </div>
+      ${offStripHTML()}
       <div class="chips" id="patChips">
         ${patternsOf(state.dayType).map((x) => `<button class="chip ${x.id === state.diagram ? 'on' : ''}" data-p="${x.id}">${esc(x.chip || ('No.' + x.no))}</button>`).join('')}
       </div>
@@ -2836,6 +3178,8 @@
 
   /* ---- 指令室・列車詳細への入口（行路・検索・ダイヤのどこからでも） ---- */
   document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-off-detail]')) { e.preventDefault(); openOffDetail(); return; }
+    if (e.target.closest('[data-off-refresh]')) { e.preventDefault(); offFetchAll(true); return; }
     const b = e.target.closest('[data-cmd]');
     if (!b) return;
     e.preventDefault(); e.stopPropagation();
@@ -2951,6 +3295,11 @@
   esFetch(false);
   loadStops();
 
+  /* 公式運行情報（公式X・遅延証明書・運行状況） */
+  offLoad();
+  offRepaint();
+  offFetchAll(false);
+
   /* 在線位置（西鉄 列車走行位置） */
   posLoad();
   renderPosBar();
@@ -2959,13 +3308,17 @@
     if (POS.status === 'ready' || POS.status === 'loading') { state.view = 'cmd'; render(); }
     else openPosAlert();
   });
-  if ($('#allRefresh')) $('#allRefresh').addEventListener('click', () => { posFetch(true); if (ES.status !== 'loading') esFetch(true); });
+  if ($('#allRefresh')) $('#allRefresh').addEventListener('click', () => { posFetch(true); offFetchAll(true); if (ES.status !== 'loading') esFetch(true); });
   setInterval(() => {
     if (document.visibilityState === 'visible' && CMD.auto) { posFetch(false); renderPosBar(); }
   }, 60 * 1000);
   setInterval(() => { if (state.view === 'cmd') updateCmdClock(); }, 1000);
+  /* 公式運行情報は指令タブ以外（行路・ダイヤ）でも更新しておく */
+  setInterval(() => {
+    if (document.visibilityState === 'visible') offFetchAll(false);
+  }, 60 * 1000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') posFetch(true);
+    if (document.visibilityState === 'visible') { posFetch(true); offFetchAll(false); }
   });
   if ($('#esPill')) $('#esPill').addEventListener('click', () => {
     if (ES.status === 'idle') esFetch(true); else openEsDetail();
